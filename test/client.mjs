@@ -188,7 +188,7 @@ console.log("client bundle");
 
 await check("the factory exposes apply, inject, and the test seam", () => {
   assert.equal(typeof bundle.apply, "function");
-  assert.deepEqual(bundle.inject, ["slots", "locale", "sidebarRight", "sidebarRightTabs"]);
+  assert.deepEqual(bundle.inject, ["slots", "locale", "sidebarRight", "sidebarRightTabs", "shortcuts"]);
   assert.equal(typeof Gutter, "function");
   assert.equal(typeof Hunks, "function");
   assert.equal(typeof FileBlock, "function");
@@ -243,24 +243,44 @@ await check("the diff body is inset from the panel edges", () => {
   assert.match(rule(".dsh-diff__hunkHead"), /padding:\s*\S+\s+\S+/, "the hunk header lost its inset");
 });
 
-await check("apply registers the dictionary, the tab type, and the tab body", () => {
-  const calls = { locale: [], tabs: [], slots: [] };
-  const ctx = {
+/** Everything one `apply` call registered. */
+const calls = { locale: [], tabs: [], slots: [], shortcuts: [] };
+
+/**
+ * Build a context that records what the bundle registers.
+ * @param overrides - per-test replacements, merged one level deep.
+ * @returns the stub context.
+ */
+function recordingContext(overrides = {}) {
+  const sink = overrides.sink ?? calls;
+  return {
     effect: (fn) => fn(),
     locale: {
-      register: (ns, dicts) => calls.locale.push({ ns, dicts }),
+      register: (ns, dicts) => sink.locale.push({ ns, dicts }),
       bind: () => (key) => key
     },
-    sidebarRightTabs: { register: (definition) => calls.tabs.push(definition) },
+    sidebarRightTabs: { register: (definition) => sink.tabs.push(definition) },
+    shortcuts: { register: (command) => sink.shortcuts.push(command) },
+    sidebarRight: {
+      commandTarget: () => ({ sessionId: "s", paneId: "p", host: "dock", tabId: undefined }),
+      openTabFromTarget: () => {}
+    },
     slots: {
       inject: (slot) => {
-        calls.slots.push(slot);
+        sink.slots.push(slot);
         return () => {};
       },
       register: (options, component) => ({ options, component })
-    }
+    },
+    ...overrides
   };
-  bundle.apply(ctx);
+}
+
+/** A fresh recorder for the tests that need their own. */
+const freshCalls = () => ({ locale: [], tabs: [], slots: [], shortcuts: [] });
+
+await check("apply registers the dictionary, the tab type, and the tab body", () => {
+  bundle.apply(recordingContext());
 
   assert.deepEqual(calls.locale.map((entry) => entry.ns), ["dshDiffViewer"]);
   /* Both languages must carry the name; one key means the tab chip and the
@@ -273,13 +293,84 @@ await check("apply registers the dictionary, the tab type, and the tab body", ()
   const type = calls.tabs[0];
   assert.equal(type.id, "dsh-diff-viewer");
   assert.equal(type.kind, "dsh-diff-viewer");
-  assert.equal(type.multiple, true);
+  /* Not multi-instance: a fresh address per open is what adds a second tab. */
+  assert.equal(type.multiple, false, "a multi-instance type opens a new tab every time");
   /* The tab chip and the guide entry draw the same name, from the same key. */
   assert.deepEqual(type.guide.map((entry) => entry.id), ["open"]);
+  /* The column draws keycaps from this id, so it has to name the command. */
+  assert.equal(type.guide[0].commandId, calls.shortcuts[0].id, "the guide entry names a command that is not registered");
   assert.equal(type.title(), "name", "the tab chip names itself from its own key");
   assert.equal(type.guide[0].title(), "name", "the guide entry names itself separately from the tab");
   assert.equal(typeof type.guide[0].description(), "string");
   assert.ok(calls.slots.includes("sidebar.right.pane.tab"), "the tab body slot was not injected");
+
+  assert.equal(calls.shortcuts.length, 1, "the open shortcut was not registered");
+  const command = calls.shortcuts[0];
+  assert.equal(command.id, "diffViewer.open");
+  /* Cmd/Ctrl+D on the desktop profiles the user actually runs. */
+  assert.deepEqual(command.defaults["desktop:macos"], { code: "KeyD", modifiers: ["primary"] });
+  assert.ok(command.regions.includes("page"), "the shortcut does not fire on the page");
+  /* The three draws the same key, so one name and one label for both seats. */
+  assert.equal(command.label(), "name");
+});
+
+await check("the command the guide entry names has a binding to draw", () => {
+  /* The column resolves `commandId` against the shortcut catalog and draws
+     whatever comes back, so the hint exists only while the entry names a
+     registered command that carries keys for the running platform. */
+  const live = freshCalls();
+  bundle.apply(recordingContext({ sink: live }));
+  const entry = live.tabs[0].guide[0];
+  const command = live.shortcuts.find((row) => row.id === entry.commandId);
+  assert.ok(command !== undefined, `no command answers the guide entry's commandId (${entry.commandId})`);
+  const desktop = Object.entries(command.defaults).filter(([profile]) => profile.startsWith("desktop:"));
+  assert.ok(desktop.length > 0, "the command has no desktop binding, so the capsule would draw no hint");
+  for (const [profile, binding] of desktop) {
+    assert.equal(binding.code, "KeyD", `${profile} is not bound to the D key`);
+    assert.deepEqual(binding.modifiers, ["primary"], `${profile} is not bound to the platform modifier`);
+  }
+});
+
+await check("the shortcut declares no Web binding, which the registry would reject", () => {
+  /* `shortcuts.register` validates every runtime/platform pair, and a browser
+     owns Cmd/Ctrl+D as bookmark: `isWebBindingAllowed` admits a single primary
+     modifier only for Comma and Backslash. A declared Web default would throw
+     `Unsupported Web shortcut` and take the whole plugin down with it. */
+  const command = calls.shortcuts[0];
+  for (const key of Object.keys(command.defaults)) {
+    assert.ok(key.startsWith("desktop:"), `a Web default would be rejected at registration: ${key}`);
+  }
+  assert.equal(command.defaults["web:macos"], undefined);
+});
+
+await check("the shortcut resolves a session, and blocks when there is none", () => {
+  const opened = [];
+  const live = freshCalls();
+  bundle.apply(
+    recordingContext({
+      sink: live,
+      sidebarRight: {
+        commandTarget: () => ({ sessionId: "s1", paneId: "p1", host: "dock", tabId: undefined }),
+        openTabFromTarget: (kind, target) => opened.push([kind, target.sessionId])
+      }
+    })
+  );
+  const resolved = live.shortcuts[0].resolve({ target: undefined });
+  assert.equal(resolved.status, "handled", "a resolvable target was not handled");
+  resolved.run();
+  assert.deepEqual(opened, [["dsh-diff-viewer", "s1"]], "the shortcut opened the wrong kind or session");
+
+  /* Without a mounted session the command must refuse, not throw. */
+  const barren = freshCalls();
+  bundle.apply(
+    recordingContext({
+      sink: barren,
+      sidebarRight: { commandTarget: () => undefined, openTabFromTarget: () => {} }
+    })
+  );
+  const blocked = barren.shortcuts[0].resolve({ target: undefined });
+  assert.equal(blocked.status, "blocked", "a missing session was not reported");
+  assert.equal(blocked.reason, "shortcut.noSession");
 });
 
 await check("a hunk line's number reaches the gutter", () => {

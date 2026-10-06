@@ -11,6 +11,10 @@ contents are read and presented too. When it does not, the tab shows the **Not a
 git project** state instead. All visible text goes through the client locale
 service, which ships an English and a Chinese dictionary.
 
+Open it from the right sidebar's **+** guide, which shows its **⌘D** keycap
+(`Ctrl+D` on Windows and Linux), or press that key directly. Either way, if the
+tab is already open it is focused rather than duplicated.
+
 ## What it looks like
 
 | State | Body |
@@ -132,6 +136,27 @@ grid, and is one path used twice: the expanded state is the same triangle turned
 a quarter turn about the grid centre, so the two cannot drift apart. It replaces
 the `▸`/`▾` glyph pair, which rendered as a sliver at any font size small enough
 to fit the row.
+
+**One tab, not many.** The type is registered `multiple: false`. A
+multi-instance type mints a fresh address per open (`<page>/<uuid>`), so every
+open adds another tab; a single address instead lets the owner's own
+`revealIfOpened` path find the open tab and focus it. That is what makes both the
+guide entry and the shortcut converge on one tab, and it is why `multiple` is
+load-bearing rather than cosmetic.
+
+**The shortcut is desktop-only.** `ctx.shortcuts` validates every runtime and
+platform pair at registration, not just the running one, and a browser owns
+Cmd/Ctrl+D as bookmark: a single primary modifier is admitted for Web only on
+Comma and Backslash. A declared Web default would therefore throw
+`Unsupported Web shortcut` and take the whole plugin down. Only the three
+desktop profiles are declared, and the key is `primary` rather than `meta` so it
+follows the platform — Command on macOS, Control elsewhere. The guide entry names
+the command through `commandId`, which is what makes the column draw those same
+keys on the entry and set them as its `aria-keyshortcuts`; an id matching no
+command would lose the hint silently, so the client check ties the two together. The resolver asks
+`ctx.sidebarRight.commandTarget` for the focused pane and falls back to the
+mounted session, so the key works from the composer too, and reports a blocked
+command rather than throwing when no session is mounted.
 
 **Untracked files.** git reports these as paths only, so the Host reads each one
 and builds the all-additions hunk git would have produced. The read is bounded:
