@@ -1,0 +1,35 @@
+{
+  "name": "dsh-diff-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Git diff viewer for the DSH right sidebar: shows the working tree's changes, or reports that the project is not a git repository",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "files": [
+    "lib/*.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/host-route.mjs"
+  },
+  "license": "MIT"
+}
