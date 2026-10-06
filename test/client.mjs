@@ -148,7 +148,7 @@ function byClass(result, className) {
 const here = dirname(fileURLToPath(import.meta.url));
 const source = await readFile(join(here, "..", "lib", "client.js"), "utf8");
 const bundle = loadBundle();
-const { Gutter, Hunks, FileBlock, Mark } = bundle.__internals;
+const { Caret, Gutter, Hunks, FileBlock, Mark } = bundle.__internals;
 
 /**
  * The mark geometry the bundle draws, mirrored here so the assertions name the
@@ -193,6 +193,7 @@ await check("the factory exposes apply, inject, and the test seam", () => {
   assert.equal(typeof Hunks, "function");
   assert.equal(typeof FileBlock, "function");
   assert.equal(typeof Mark, "function");
+  assert.equal(typeof Caret, "function");
 });
 
 const installedCss = () => styles.tag?.textContent ?? "";
@@ -423,6 +424,27 @@ await check("the marks are drawn on a centred grid, not typed from a font", () =
   assert.ok(MARK_PATH["+"].includes("V"), "the plus lost its vertical stroke");
   assert.ok(!MARK_PATH["-"].includes("V"), "the minus grew a vertical stroke");
   assert.equal(MARK_PATH["*"].split("M").length - 1, 3, "the star is not three strokes");
+});
+
+await check("the disclosure triangle is drawn, and is one shape turned a quarter", () => {
+  /* The `▸`/`▾` glyph pair it replaced rendered as a sliver at any font size
+     small enough to fit the row, and was font-dependent like the marks. */
+  const closed = render(Caret, { open: false }).elements;
+  const open = render(Caret, { open: true }).elements;
+  const svg = closed[0];
+  assert.equal(svg.type, "svg", "the caret is not drawn");
+  assert.equal(svg.props.className, "dsh-diff__caret");
+  assert.equal(svg.props.width, svg.props.height, "the caret canvas is not square");
+  assert.ok(svg.props.width >= 12, `the caret is still too small: ${svg.props.width}px`);
+  assert.equal(svg.props["aria-hidden"], "true", "the caret is announced as text");
+  /* The size the stylesheet enforces has to agree with the drawing. */
+  assert.match(rule(".dsh-diff__caret"), /width:\s*12px/, "the stylesheet shrinks the caret again");
+  assert.match(rule(".dsh-diff__caret"), /height:\s*12px/, "the caret has no height of its own");
+  assert.equal(closed[1].props.fill, "currentColor", "the caret ignores the theme colour");
+  /* One path, so the two states cannot drift apart. */
+  assert.equal(closed[1].props.d, open[1].props.d, "the two states draw different shapes");
+  assert.equal(closed[1].props.transform, undefined, "the collapsed caret is already turned");
+  assert.match(String(open[1].props.transform), /rotate\(90 5 5\)/, "the expanded caret is not turned about the grid centre");
 });
 
 await check("the badge is a centred square, not a word or a tall box", () => {

@@ -127,6 +127,12 @@ the one thing the mark cannot say: an untracked file draws a dashed border. The
 mark's tooltip names its status in the active locale, and the row's accessible
 name is that word plus the path — a bare mark is not a name.
 
+**The disclosure triangle.** The row's expand arrow is drawn on the same 10×10
+grid, and is one path used twice: the expanded state is the same triangle turned
+a quarter turn about the grid centre, so the two cannot drift apart. It replaces
+the `▸`/`▾` glyph pair, which rendered as a sliver at any font size small enough
+to fit the row.
+
 **Untracked files.** git reports these as paths only, so the Host reads each one
 and builds the all-additions hunk git would have produced. The read is bounded:
 512 KiB per file, 4 MiB and 400 files per collection. A file past a cap is
