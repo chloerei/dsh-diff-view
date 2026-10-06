@@ -1,8 +1,8 @@
 {
-  "name": "dsh-diff-viewer",
+  "name": "dsh-diff-view",
   "version": "0.1.0",
   "private": true,
-  "description": "Git diff viewer for the DSH right sidebar: shows the working tree's changes, or reports that the project is not a git repository",
+  "description": "Git diff view for the DSH right sidebar: shows the working tree's changes, or reports that the project is not a git repository",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

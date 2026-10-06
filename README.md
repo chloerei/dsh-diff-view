@@ -1,8 +1,8 @@
-# dsh-diff-viewer
+# dsh-diff-view
 
 A DeepSeek Harness plugin that shows the current project's `git diff` in the
 **right sidebar**. Both the entry point and the view live in the right column:
-the tab-add ("+") guide lists **Diff Viewer**, and choosing it opens a new tab
+the tab-add ("+") guide lists **Diff View**, and choosing it opens a new tab
 whose body reads the session's working tree.
 
 When `<session cwd>/.git` exists, the tab shows the working tree's changes
@@ -32,8 +32,8 @@ tab is already open it is focused rather than duplicated.
 | Path | Role |
 |---|---|
 | `package.json` | Bundle + `dsh.client` manifest (`.`, `./client`, bundle patch) |
-| `cordis.patch.yml` | The bundle layer: one `insert` row named `dsh-diff-viewer` |
-| `lib/index.js` | Host half: the read-only `GET /dsh-diff-viewer/diff` route |
+| `cordis.patch.yml` | The bundle layer: one `insert` row named `dsh-diff-view` |
+| `lib/index.js` | Host half: the read-only `GET /dsh-diff-view/diff` route |
 | `lib/git-diff.js` | Host half: pure git collection and unified-diff parsing |
 | `lib/client.js` | Browser half: the `git-diff` tab type and its body |
 | `test/smoke.mjs` | Host-half checks against throwaway repositories |
@@ -51,7 +51,7 @@ The installer takes an **absolute** path to this package directory — relative
 paths are rejected:
 
 ```
-dsh plugin --profile desktop add /absolute/path/to/dsh-diff-viewer
+dsh plugin --profile desktop add /absolute/path/to/dsh-diff-view
 ```
 
 From the package root, `"$PWD"` expands to that path:
@@ -59,7 +59,7 @@ From the package root, `"$PWD"` expands to that path:
 
 Equivalently, install it through the agent's `plugin_manager` tool with
 `action: install_bundle` and this directory as `target`. Either route records a
-`link:` dependency in the profile and appends `dsh-diff-viewer` to
+`link:` dependency in the profile and appends `dsh-diff-view` to
 `dsh.profile.bundles`, so the bundle patch supplies the row.
 
 Then open a session and use **+** in the right sidebar's tab strip.
@@ -187,7 +187,7 @@ block on a credential prompt, take the index lock, or emit localized output.
 
 **Rendering.** Pushes are parsed host-side into hunks carrying per-line numbers,
 so the browser does no diff parsing and no number arithmetic. Each hunk line
-carries `oldLine`, `newLine`, and the `number` the viewer prints, resolved by the
+carries `oldLine`, `newLine`, and the `number` the view prints, resolved by the
 Host: a deletion is cited by its old-side number and everything else by its
 new-side one. Putting that choice on the side that owns the diff means the client
 only prints a field, and the Host's own tests cover which number each line kind

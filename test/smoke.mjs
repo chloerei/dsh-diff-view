@@ -1,7 +1,7 @@
 /**
  * Smoke test for the host half's git collection.
  *
- * Builds a throwaway repository, fills every status the viewer renders, then
+ * Builds a throwaway repository, fills every status the view renders, then
  * asserts the collected payload. Run with `node test/smoke.mjs` from the
  * package root; it needs a `git` on PATH and writes only under the OS temp dir.
  */
@@ -43,7 +43,7 @@ async function check(label, body) {
   }
 }
 
-const root = await mkdtemp(join(tmpdir(), "dsh-diff-viewer-"));
+const root = await mkdtemp(join(tmpdir(), "dsh-diff-view-"));
 try {
   // --- pure parsing -------------------------------------------------------
   await check("parseUnifiedPatch reads hunks, numbering, and rename status", () => {
@@ -144,7 +144,7 @@ try {
   await rm(join(repo, "remove.txt"));
   await writeFile(join(repo, "fresh.txt"), "untracked\n");
 
-  await check("a dirty tree reports every file the viewer renders", async () => {
+  await check("a dirty tree reports every file the view renders", async () => {
     const result = await collectWorkingTreeDiff({ run: git, cwd: repo, signal: undefined });
     assert.equal(result.state, "ok");
     const byPath = new Map(result.files.map((file) => [file.path, file]));

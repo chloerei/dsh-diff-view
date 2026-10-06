@@ -149,7 +149,7 @@ async function call(state, request) {
   return { status: res.statusCode, body: res.json() };
 }
 
-const root = await mkdtemp(join(tmpdir(), "dsh-diff-viewer-route-"));
+const root = await mkdtemp(join(tmpdir(), "dsh-diff-view-route-"));
 try {
   const repo = join(root, "repo");
   await mkdir(repo);
@@ -163,7 +163,7 @@ try {
   await writeFile(join(repo, "tracked.txt"), "after\n");
 
   await check("the plugin exports the expected Cordis shape", () => {
-    assert.equal(name, "dsh-diff-viewer");
+    assert.equal(name, "dsh-diff-view");
     assert.ok(Array.isArray(inject));
     assert.ok(inject.includes("webServer"));
     assert.ok(inject.includes("connection"));
@@ -174,14 +174,14 @@ try {
   await check("the route is registered as an exact GET path", () => {
     const state = mountPlugin();
     assert.equal(state.route.kind, "exact");
-    assert.equal(state.route.path, "/dsh-diff-viewer/diff");
+    assert.equal(state.route.path, "/dsh-diff-view/diff");
     assert.equal(typeof state.route.handler, "function");
     assert.equal(state.effects, 1);
   });
 
   await check("an authorized request returns the diff for the session cwd", async () => {
     const state = mountPlugin({ sessionCwd: repo });
-    const { status, body } = await call(state, { url: "/dsh-diff-viewer/diff?sessionId=session-1" });
+    const { status, body } = await call(state, { url: "/dsh-diff-view/diff?sessionId=session-1" });
     assert.equal(status, 200);
     assert.equal(body.state, "ok");
     assert.equal(body.cwd, repo);
@@ -206,7 +206,7 @@ try {
     await mkdir(other);
     await writeFile(join(other, "plain.txt"), "hello\n");
     const state = mountPlugin({ sessionCwd: repo });
-    const { status, body } = await call(state, { url: `/dsh-diff-viewer/diff?path=${encodeURIComponent(other)}` });
+    const { status, body } = await call(state, { url: `/dsh-diff-view/diff?path=${encodeURIComponent(other)}` });
     assert.equal(status, 200);
     assert.equal(body.state, "no-git");
     assert.equal(body.cwd, other);
@@ -217,7 +217,7 @@ try {
     const plain = join(root, "plain-project");
     await mkdir(plain);
     const state = mountPlugin({ sessionCwd: plain });
-    const { status, body } = await call(state, { url: "/dsh-diff-viewer/diff?sessionId=session-zone" });
+    const { status, body } = await call(state, { url: "/dsh-diff-view/diff?sessionId=session-zone" });
     assert.equal(status, 200);
     assert.equal(body.state, "no-git");
     assert.equal(body.cwd, plain);
@@ -227,14 +227,14 @@ try {
 
   await check("no known directory is a 404, not an empty diff", async () => {
     const state = mountPlugin();
-    const { status, body } = await call(state, { url: "/dsh-diff-viewer/diff" });
+    const { status, body } = await call(state, { url: "/dsh-diff-view/diff" });
     assert.equal(status, 404);
     assert.equal(body.state, "error");
   });
 
   await check("the sandbox policy root is the last-resort working directory", async () => {
     const state = mountPlugin({ sandboxPolicy: { workspaceRoot: repo } });
-    const { status, body } = await call(state, { url: "/dsh-diff-viewer/diff?sessionId=gone" });
+    const { status, body } = await call(state, { url: "/dsh-diff-view/diff?sessionId=gone" });
     assert.equal(status, 200);
     assert.equal(body.cwd, repo);
     assert.equal(body.state, "ok");
@@ -242,14 +242,14 @@ try {
 
   await check("the authenticated fence refuses before any git runs", async () => {
     const state = mountPlugin({ sessionCwd: repo, rejection: 401 });
-    const { status } = await call(state, { url: "/dsh-diff-viewer/diff?sessionId=session-1" });
+    const { status } = await call(state, { url: "/dsh-diff-view/diff?sessionId=session-1" });
     assert.equal(status, 401);
     assert.equal(state.spawns.length, 0);
   });
 
   await check("any method other than GET is a 405", async () => {
     const state = mountPlugin({ sessionCwd: repo });
-    const { status } = await call(state, { method: "POST", url: "/dsh-diff-viewer/diff?sessionId=session-1" });
+    const { status } = await call(state, { method: "POST", url: "/dsh-diff-view/diff?sessionId=session-1" });
     assert.equal(status, 405);
     assert.equal(state.spawns.length, 0);
   });

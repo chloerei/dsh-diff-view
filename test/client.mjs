@@ -91,7 +91,7 @@ function loadBundle() {
   /* The bundle is a classic script, not a module, so it runs under new Function. */
   new Function("window", "document", source)(window, document);
   assert.ok(registration !== undefined, "the bundle never registered itself");
-  assert.equal(registration.id, "dsh-diff-viewer", "the module id must equal the package name");
+  assert.equal(registration.id, "dsh-diff-view", "the module id must equal the package name");
   return registration.factory(require);
 }
 
@@ -201,7 +201,7 @@ const installedCss = () => styles.tag?.textContent ?? "";
 await check("the stylesheet is installed once, tagged with the package", () => {
   assert.equal(styles.appends, 1, "the bundle did not install exactly one stylesheet");
   assert.ok(installedCss().length > 0, "the installed stylesheet is empty");
-  assert.equal(styles.tag.dataset.plugin, "dsh-diff-viewer", "the stylesheet is not tagged with the package");
+  assert.equal(styles.tag.dataset.plugin, "dsh-diff-view", "the stylesheet is not tagged with the package");
 });
 
 await check("a hot reload refreshes the existing stylesheet instead of pinning the first one", () => {
@@ -282,17 +282,17 @@ const freshCalls = () => ({ locale: [], tabs: [], slots: [], shortcuts: [] });
 await check("apply registers the dictionary, the tab type, and the tab body", () => {
   bundle.apply(recordingContext());
 
-  assert.deepEqual(calls.locale.map((entry) => entry.ns), ["dshDiffViewer"]);
+  assert.deepEqual(calls.locale.map((entry) => entry.ns), ["dshDiffView"]);
   /* Both languages must carry the name; one key means the tab chip and the
      guide entry cannot drift apart. */
   const { en, zh } = calls.locale[0].dicts;
-  assert.equal(en.name, "Diff Viewer", "the English name changed");
-  assert.equal(zh.name, "Diff 查看器", "the Chinese name changed");
+  assert.equal(en.name, "Diff View", "the English name changed");
+  assert.equal(zh.name, "Diff 视图", "the Chinese name changed");
 
   assert.equal(calls.tabs.length, 1);
   const type = calls.tabs[0];
-  assert.equal(type.id, "dsh-diff-viewer");
-  assert.equal(type.kind, "dsh-diff-viewer");
+  assert.equal(type.id, "dsh-diff-view");
+  assert.equal(type.kind, "dsh-diff-view");
   /* Not multi-instance: a fresh address per open is what adds a second tab. */
   assert.equal(type.multiple, false, "a multi-instance type opens a new tab every time");
   /* The tab chip and the guide entry draw the same name, from the same key. */
@@ -306,7 +306,7 @@ await check("apply registers the dictionary, the tab type, and the tab body", ()
 
   assert.equal(calls.shortcuts.length, 1, "the open shortcut was not registered");
   const command = calls.shortcuts[0];
-  assert.equal(command.id, "diffViewer.open");
+  assert.equal(command.id, "diffView.open");
   /* Cmd/Ctrl+D on the desktop profiles the user actually runs. */
   assert.deepEqual(command.defaults["desktop:macos"], { code: "KeyD", modifiers: ["primary"] });
   assert.ok(command.regions.includes("page"), "the shortcut does not fire on the page");
@@ -358,7 +358,7 @@ await check("the shortcut resolves a session, and blocks when there is none", ()
   const resolved = live.shortcuts[0].resolve({ target: undefined });
   assert.equal(resolved.status, "handled", "a resolvable target was not handled");
   resolved.run();
-  assert.deepEqual(opened, [["dsh-diff-viewer", "s1"]], "the shortcut opened the wrong kind or session");
+  assert.deepEqual(opened, [["dsh-diff-view", "s1"]], "the shortcut opened the wrong kind or session");
 
   /* Without a mounted session the command must refuse, not throw. */
   const barren = freshCalls();
