@@ -60,9 +60,11 @@ const reactStub = {
   useMemo: (fn) => fn(),
 };
 
-/** Whether the bundle installed its stylesheet, and the CSS it installed. */
-let styled = false;
-let installedCss = "";
+/**
+ * The page's style tag, shared across loads exactly as the real page shares it,
+ * plus how many tags were ever appended.
+ */
+const styles = { tag: null, appends: 0 };
 
 /**
  * Load the bundle the way the Harness page does.
@@ -72,12 +74,12 @@ function loadBundle() {
   const window = { __ModuleLoader__: { load: (value) => (registration = value) } };
   let registration;
   const document = {
-    querySelector: () => (styled ? {} : null),
+    querySelector: () => styles.tag,
     createElement: () => ({ dataset: {}, textContent: "" }),
     head: {
       appendChild: (tag) => {
-        styled = true;
-        installedCss = tag.textContent;
+        styles.tag = tag;
+        styles.appends += 1;
       }
     }
   };
@@ -146,7 +148,17 @@ function byClass(result, className) {
 const here = dirname(fileURLToPath(import.meta.url));
 const source = await readFile(join(here, "..", "lib", "client.js"), "utf8");
 const bundle = loadBundle();
-const { Gutter, Hunks, FileBlock } = bundle.__internals;
+const { Gutter, Hunks, FileBlock, Mark } = bundle.__internals;
+
+/**
+ * The mark geometry the bundle draws, mirrored here so the assertions name the
+ * shapes rather than reading them back out of the code under test.
+ */
+const MARK_PATH = {
+  "+": "M5 1.4V8.6M1.4 5H8.6",
+  "-": "M1.4 5H8.6",
+  "*": "M5 1.4V8.6M1.88 3.2L8.12 6.8M1.88 6.8L8.12 3.2"
+};
 
 /** A file record shaped exactly as the Host emits one. */
 const trackedFile = {
@@ -180,11 +192,27 @@ await check("the factory exposes apply, inject, and the test seam", () => {
   assert.equal(typeof Gutter, "function");
   assert.equal(typeof Hunks, "function");
   assert.equal(typeof FileBlock, "function");
+  assert.equal(typeof Mark, "function");
 });
 
+const installedCss = () => styles.tag?.textContent ?? "";
+
 await check("the stylesheet is installed once, tagged with the package", () => {
-  assert.equal(styled, true, "the bundle never installed its CSS");
-  assert.ok(installedCss.length > 0, "the installed stylesheet is empty");
+  assert.equal(styles.appends, 1, "the bundle did not install exactly one stylesheet");
+  assert.ok(installedCss().length > 0, "the installed stylesheet is empty");
+  assert.equal(styles.tag.dataset.plugin, "dsh-diff-viewer", "the stylesheet is not tagged with the package");
+});
+
+await check("a hot reload refreshes the existing stylesheet instead of pinning the first one", () => {
+  /* The bug this guards: the factory re-runs on a client hot reload while the
+     previous style tag survives, so creating the tag only when absent pinned
+     whichever CSS the first load carried and every later edit applied to
+     nothing until a full page refresh. */
+  styles.tag.textContent = "/* the stylesheet from an earlier load */";
+  loadBundle();
+  assert.equal(styles.appends, 1, "the reload appended a second style tag");
+  assert.ok(installedCss().includes(".dsh-diff__badge"), "the stale stylesheet was not replaced");
+  assert.notEqual(installedCss(), "/* the stylesheet from an earlier load */");
 });
 
 /**
@@ -194,7 +222,7 @@ await check("the stylesheet is installed once, tagged with the package", () => {
  */
 function rule(selector) {
   const pattern = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\{([^}]*)\\}`);
-  const match = pattern.exec(installedCss);
+  const match = pattern.exec(installedCss());
   assert.ok(match !== null, `no CSS rule for ${selector}`);
   return match[1];
 }
@@ -205,7 +233,7 @@ await check("long diff lines wrap instead of overflowing the panel", () => {
   assert.ok(line.includes("overflow-wrap:anywhere"), `.dsh-diff__line must break unbroken tokens, got: ${line}`);
   /* The hunk header used to be the other sideways-scrolling surface. */
   assert.ok(!rule(".dsh-diff__hunkHead").includes("overflow-x:auto"), "the hunk header can still scroll sideways");
-  assert.ok(!installedCss.includes("overflow-x:auto"), "a horizontal scroll surface remains");
+  assert.ok(!installedCss().includes("overflow-x:auto"), "a horizontal scroll surface remains");
 });
 
 await check("the diff body is inset from the panel edges", () => {
@@ -336,6 +364,102 @@ await check("the file heading shows the stat only when there is something to cou
   const binary = { ...trackedFile, note: "binary", hunks: [] };
   const withoutStat = render(FileBlock, { file: binary, open: false, onToggle: () => {}, t: (key) => key });
   assert.equal(byClass(withoutStat, "dsh-diff__statAdd").length, 0, "a binary file still advertised a line count");
+});
+
+await check("each file row is marked +, -, or * by its change kind", () => {
+  const marks = {
+    added: "+",
+    untracked: "+",
+    copied: "+",
+    deleted: "-",
+    modified: "*",
+    renamed: "*",
+    conflicted: "*"
+  };
+  for (const [status, mark] of Object.entries(marks)) {
+    const file = { ...trackedFile, status, hunks: [], note: "binary", additions: 0, deletions: 0 };
+    const result = render(FileBlock, { file, open: false, onToggle: () => {}, t: (key) => key });
+    const [badge] = byClass(result, "dsh-diff__badge");
+    assert.ok(badge !== undefined, `no badge drawn for ${status}`);
+    /* The mark is drawn, so the drawn path is the assertion. */
+    const drawn = render(Mark, { mark });
+    assert.equal(drawn.elements[0].type, "svg", `the ${mark} mark is not drawn`);
+    assert.equal(drawn.elements[1].props.d, MARK_PATH[mark], `wrong geometry for the ${mark} mark`);
+    /* The precise status still has to survive, for colour and for the tooltip. */
+    assert.equal(badge.props["data-status"], status, `the status behind the mark was lost for ${status}`);
+    assert.equal(badge.props["data-mark"], mark, `the mark attribute is missing for ${status}`);
+    assert.equal(badge.props.title, `status.${status}`, `no tooltip word for ${status}`);
+    /* The glyph is not a name, so the row carries the word. */
+    const [head] = byClass(result, "dsh-diff__fileHead");
+    assert.equal(head.props["aria-label"], `status.${status} ${file.path}`, `no accessible name for ${status}`);
+  }
+  /* An unknown status must still draw something rather than an empty box. */
+  const odd = render(FileBlock, {
+    file: { ...trackedFile, status: "mystery", hunks: [], note: "binary" },
+    open: false,
+    onToggle: () => {},
+    t: (key) => key
+  });
+  assert.equal(byClass(odd, "dsh-diff__badge")[0].props["data-mark"], "*");
+});
+
+await check("the marks are drawn on a centred grid, not typed from a font", () => {
+  /* A text glyph is placed by the font's baseline and side bearings, so centring
+     the box leaves the ink off-centre: the plus sits left and low and the
+     asterisk rides above the middle. Drawn paths are what make all three land on
+     the same centre. */
+  for (const [mark, path] of Object.entries(MARK_PATH)) {
+    assert.ok(path.length > 0, `no geometry for the ${mark} mark`);
+    const svg = render(Mark, { mark }).elements[0];
+    assert.equal(svg.type, "svg", `the ${mark} mark is not an svg`);
+    assert.equal(svg.props.stroke, "currentColor", `the ${mark} mark ignores the colour rules`);
+    assert.equal(svg.props["aria-hidden"], "true", `the ${mark} mark is announced as text`);
+    assert.ok(svg.props.width === svg.props.height, `the ${mark} mark's canvas is not square`);
+    /* The grid is 10x10, so its centre is (5,5) and every mark must reach it. */
+    assert.ok(path.includes("5 5") || path.includes("5 1.4") || path.includes("1.4 5"), `the ${mark} mark misses the centre`);
+  }
+  assert.equal(new Set(Object.values(MARK_PATH)).size, 3, "two marks draw the same geometry");
+  /* Only the addition carries a vertical stroke; only the star crosses itself. */
+  assert.ok(MARK_PATH["+"].includes("V"), "the plus lost its vertical stroke");
+  assert.ok(!MARK_PATH["-"].includes("V"), "the minus grew a vertical stroke");
+  assert.equal(MARK_PATH["*"].split("M").length - 1, 3, "the star is not three strokes");
+});
+
+await check("the badge is a centred square, not a word or a tall box", () => {
+  const badge = rule(".dsh-diff__badge");
+  const width = /width:\s*(\d+)px/.exec(badge);
+  const height = /height:\s*(\d+)px/.exec(badge);
+  assert.ok(width !== null && height !== null, `the mark has no fixed box: ${badge}`);
+  assert.equal(width[1], height[1], `the mark's box is not square: ${width[1]}x${height[1]}`);
+  assert.ok(badge.includes("box-sizing:border-box"), "the mark's border would widen its box");
+  assert.ok(badge.includes("justify-content:center"), "the mark is not centred horizontally");
+  assert.ok(badge.includes("align-items:center"), "the mark is not centred vertically");
+  assert.ok(badge.includes("inline-flex"), "the mark's box cannot centre a glyph without flex");
+  /* No padding: a padded box would no longer measure square. */
+  assert.ok(!/padding:[^;}]*[1-9]/.test(badge), `the mark's box is padded: ${badge}`);
+});
+
+await check("the colour follows the symbol, so a mark means the same thing everywhere", () => {
+  /* One colour per mark: green adds, red deletes, amber changes. Selecting on
+     the mark rather than the status is what keeps renamed and conflicted from
+     drifting away from modified when they all draw a star. */
+  assert.match(rule(`.dsh-diff__badge[data-mark="+"]`), /state-success-primary/, "an addition is not green");
+  assert.match(rule(`.dsh-diff__badge[data-mark="-"]`), /state-error-primary/, "a deletion is not red");
+  assert.match(rule(`.dsh-diff__badge[data-mark="*"]`), /state-warn-primary/, "a change is not amber");
+  /* Every status must land on one of the three coloured marks. */
+  const marks = { added: "+", untracked: "+", copied: "+", deleted: "-", modified: "*", renamed: "*", conflicted: "*" };
+  for (const [status, mark] of Object.entries(marks)) {
+    assert.ok(rule(`.dsh-diff__badge[data-mark="${mark}"]`).includes("color:"), `mark ${mark} has no colour`);
+    const file = { ...trackedFile, status, hunks: [], note: "binary" };
+    const [badge] = byClass(render(FileBlock, { file, open: false, onToggle: () => {}, t: (key) => key }), "dsh-diff__badge");
+    assert.equal(badge.props["data-mark"], mark, `${status} draws a mark with no colour rule`);
+  }
+});
+
+await check("an untracked row is not announced twice", () => {
+  const file = { ...trackedFile, status: "untracked", hunks: [], note: "binary" };
+  const result = render(FileBlock, { file, open: false, onToggle: () => {}, t: (key) => key });
+  assert.deepEqual(byClass(result, "dsh-diff__chip").map((node) => node.props.children), []);
 });
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${String(failures)} check(s) failed`);

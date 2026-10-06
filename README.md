@@ -15,9 +15,9 @@ service, which ships an English and a Chinese dictionary.
 
 | State | Body |
 |---|---|
-| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file with status badge, hunks, and line numbers |
+| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and line numbers |
 | tracked change | That file's hunks against `HEAD` |
-| untracked file | Its whole contents as one all-additions hunk, badged `untracked`; tracked changes are listed first, untracked files after |
+| untracked file | Its whole contents as one all-additions hunk, marked `+` with a dashed border; tracked changes are listed first, untracked files after |
 | file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
 | clean tree | "The working tree has no changes." |
 | no `.git` | "Not a git project" with the inspected directory |
@@ -70,6 +70,12 @@ advertises. A changed byte makes the Host publish a `rebuilt` frame on its
 `/plugins/events` stream, and the open page swaps the module in place; reopening
 the tab is enough.
 
+That reload re-runs the bundle's factory **in place**, and the style tag it
+installed on the first load survives. Installing the stylesheet only when no tag
+exists would therefore pin whichever CSS the first load happened to carry, and
+every later edit would apply to nothing until a full page refresh. The bundle
+updates an existing tag instead, which `test/client.mjs` pins.
+
 **`lib/index.js` and `lib/git-diff.js` — restart.** The profile's HMR watches
 composition files (`package.json`, `cordis.patch.yml`), not host module source,
 and the loader imports host halves with a plain `import()` and no cache-busting
@@ -99,6 +105,27 @@ exactly as specified: a project nested inside someone else's repository is not
 claimed as that repository. When `.git` is present the collector still probes
 `git rev-parse --show-toplevel` and runs every later command there, so a linked
 worktree or submodule reports repository-relative paths.
+
+**The file mark.** A file row is marked by its change kind, one mark in a
+centred 16px square before the name, because a sidebar heading has no room for a
+word: `+` for added, untracked, and copied files, `-` for deleted ones, and `*`
+for modified, renamed, and conflicted ones.
+
+The three marks are **drawn as SVG paths**, not typed. A text glyph is placed by
+the font's baseline and side bearings rather than by its own ink, so centring the
+line box leaves the visible mark off-centre — render `+`, `-`, and `*` in a
+square and the plus sits left and low while the asterisk rides well above the
+middle. No single CSS nudge fixes three differently-offset glyphs, and the
+offsets change with the font. Paths on a 10×10 grid put every mark exactly on the
+centre and give the three the same weight whatever font the page loads.
+
+The colour follows the mark — green adds, red deletes, amber changes — so a mark
+means the same thing on every row. The rule selects on the mark rather than the
+status, which is what keeps renamed and conflicted from drifting away from
+modified when all three draw a star, and the precise status rides alongside for
+the one thing the mark cannot say: an untracked file draws a dashed border. The
+mark's tooltip names its status in the active locale, and the row's accessible
+name is that word plus the path — a bare mark is not a name.
 
 **Untracked files.** git reports these as paths only, so the Host reads each one
 and builds the all-additions hunk git would have produced. The read is bounded:
