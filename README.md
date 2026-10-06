@@ -2,7 +2,7 @@
 
 A DeepSeek Harness plugin that shows the current project's `git diff` in the
 **right sidebar**. Both the entry point and the view live in the right column:
-the tab-add ("+") guide lists **Git diff**, and choosing it opens a new tab
+the tab-add ("+") guide lists **Diff Viewer**, and choosing it opens a new tab
 whose body reads the session's working tree.
 
 When `<session cwd>/.git` exists, the tab shows the working tree's changes

@@ -263,16 +263,22 @@ await check("apply registers the dictionary, the tab type, and the tab body", ()
   bundle.apply(ctx);
 
   assert.deepEqual(calls.locale.map((entry) => entry.ns), ["dshDiffViewer"]);
-  assert.ok(calls.locale[0].dicts.en["tab.title"] !== undefined, "the English dictionary is incomplete");
-  assert.ok(calls.locale[0].dicts.zh["tab.title"] !== undefined, "the Chinese dictionary is incomplete");
+  /* Both languages must carry the name; one key means the tab chip and the
+     guide entry cannot drift apart. */
+  const { en, zh } = calls.locale[0].dicts;
+  assert.equal(en.name, "Diff Viewer", "the English name changed");
+  assert.equal(zh.name, "Diff 查看器", "the Chinese name changed");
 
   assert.equal(calls.tabs.length, 1);
   const type = calls.tabs[0];
   assert.equal(type.id, "dsh-diff-viewer");
   assert.equal(type.kind, "dsh-diff-viewer");
   assert.equal(type.multiple, true);
-  assert.equal(type.title(), "tab.title");
+  /* The tab chip and the guide entry draw the same name, from the same key. */
   assert.deepEqual(type.guide.map((entry) => entry.id), ["open"]);
+  assert.equal(type.title(), "name", "the tab chip names itself from its own key");
+  assert.equal(type.guide[0].title(), "name", "the guide entry names itself separately from the tab");
+  assert.equal(typeof type.guide[0].description(), "string");
   assert.ok(calls.slots.includes("sidebar.right.pane.tab"), "the tab body slot was not injected");
 });
 
