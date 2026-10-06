@@ -15,7 +15,7 @@ service, which ships an English and a Chinese dictionary.
 
 | State | Body |
 |---|---|
-| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file with status badge, hunks, and old/new line numbers |
+| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file with status badge, hunks, and line numbers |
 | tracked change | That file's hunks against `HEAD` |
 | untracked file | Its whole contents as one all-additions hunk, badged `untracked`; tracked changes are listed first, untracked files after |
 | file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
@@ -34,6 +34,7 @@ service, which ships an English and a Chinese dictionary.
 | `lib/client.js` | Browser half: the `git-diff` tab type and its body |
 | `test/smoke.mjs` | Host-half checks against throwaway repositories |
 | `test/host-route.mjs` | Host-half checks that drive the registered route |
+| `test/client.mjs` | Browser-half checks that render the bundle without React |
 
 Both halves are plain, hand-written JavaScript. No build step, no bundler, no
 runtime dependency: the browser artifact is the `window.__ModuleLoader__.load`
@@ -113,14 +114,34 @@ abandoned after 20 s or when the client disconnects. git runs with
 `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, and `LC_ALL=C` so it can never
 block on a credential prompt, take the index lock, or emit localized output.
 
-**Rendering.** Pushes are parsed host-side into hunks with per-line old/new
-numbers, so the browser does no diff parsing. Files start collapsed when a diff
-exceeds 1200 lines, and no single file renders more than 2500 lines.
+**Rendering.** Pushes are parsed host-side into hunks carrying per-line numbers,
+so the browser does no diff parsing and no number arithmetic. Each hunk line
+carries `oldLine`, `newLine`, and the `number` the viewer prints, resolved by the
+Host: a deletion is cited by its old-side number and everything else by its
+new-side one. Putting that choice on the side that owns the diff means the client
+only prints a field, and the Host's own tests cover which number each line kind
+carries.
+
+Each line draws **one** number, not two: a two-column gutter is half empty on
+every line it draws — the old-side cell on an addition, the new-side cell on a
+deletion — so in a sidebar panel most of the leading width would be spent on
+nothing. The row's add/delete tint runs under the gutter instead of stopping at
+it, so the leading edge is part of the change rather than a blank band.
+
+Lines are inset from both panel edges, and a long line **wraps** rather than
+scrolling sideways: the panel is narrow, and a horizontal scrollbar in it hides
+more than it reveals. `white-space:pre-wrap` keeps each line's own indentation
+while wrapping, and `overflow-wrap:anywhere` breaks the unbroken tokens —
+minified JavaScript, long URLs — that would otherwise still overflow. Files start
+collapsed when a diff exceeds 1200 lines, and no single file renders more than
+2500 lines.
+
 ## Test
 
 ```
 node test/smoke.mjs       # git collection and unified-diff parsing
 node test/host-route.mjs  # the HTTP route, end to end
+node test/client.mjs      # the browser half, rendered
 ```
 
 `smoke.mjs` builds throwaway repositories in the OS temp directory and
@@ -134,3 +155,13 @@ untracked budget, a directory with no `.git`, and a missing git executable.
 request/response objects: an authorized diff, the `?path=` override, the
 non-git project state, the missing-directory 404, the sandbox-policy fallback,
 the authorization fence, and the 405 for a non-GET method.
+
+`client.mjs` loads `lib/client.js` through a stub `__ModuleLoader__` and a stub
+`require`, then renders the presentational pieces the bundle exposes as a test
+seam — no React, no DOM. It covers what the Host's own tests cannot: a
+host/client field-name mismatch leaves the payload perfectly correct while the
+panel draws blank, which is exactly how the line-number gutter once rendered
+empty on every line. It asserts that each hunk line's number and side reach the
+gutter, that signs, row tints, hunk headers, and untracked contents are drawn,
+that a collapsed block draws no hunk, and that each `note` renders an
+explanation instead of nothing.

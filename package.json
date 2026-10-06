@@ -29,7 +29,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs && node test/host-route.mjs"
+    "test": "node test/smoke.mjs && node test/host-route.mjs && node test/client.mjs"
   },
   "license": "MIT"
 }
