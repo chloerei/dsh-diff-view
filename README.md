@@ -158,6 +158,19 @@ command would lose the hint silently, so the client check ties the two together.
 mounted session, so the key works from the composer too, and reports a blocked
 command rather than throwing when no session is mounted.
 
+**Type scale.** Every size in the panel derives from one local scale, and the
+scale is fixed: the diff reads at one size however the conversation is set.
+`--dsh-diff-code` is the single number (14px); `--dsh-diff-meta` is the chrome's
+own name for that same size, so the toolbar, the counts, and the notices read at
+it too; `micro` is two pixels under it for the small chips; and the gutter, the
+marks, and the glyph boxes are sized to match. Changing that one number resizes
+the whole panel, text and geometry together.
+
+The panel deliberately does **not** read `--dsh-content-font-size`, the
+preference the theme publishes on the body for Settings → Font size. Following it
+would make the sidebar's diff resize with a setting labelled as affecting
+conversation content only.
+
 **Untracked files.** git reports these as paths only, so the Host reads each one
 and builds the all-additions hunk git would have produced. The read is bounded:
 512 KiB per file, 4 MiB and 400 files per collection. A file past a cap is

@@ -534,9 +534,12 @@ await check("the disclosure triangle is drawn, and is one shape turned a quarter
   assert.equal(svg.props.width, svg.props.height, "the caret canvas is not square");
   assert.ok(svg.props.width >= 12, `the caret is still too small: ${svg.props.width}px`);
   assert.equal(svg.props["aria-hidden"], "true", "the caret is announced as text");
-  /* The size the stylesheet enforces has to agree with the drawing. */
-  assert.match(rule(".dsh-diff__caret"), /width:\s*12px/, "the stylesheet shrinks the caret again");
-  assert.match(rule(".dsh-diff__caret"), /height:\s*12px/, "the caret has no height of its own");
+  /* The size the stylesheet enforces has to agree with the drawing, and it may
+     not pin pixels: the whole panel tracks the app's font-size preference. */
+  const caretRule = rule(".dsh-diff__caret");
+  assert.match(caretRule, /width:var\(--dsh-diff-caret\)/, "the stylesheet does not size the caret from the scale");
+  assert.match(caretRule, /height:var\(--dsh-diff-caret\)/, "the caret has no height of its own");
+  assert.match(rule(".dsh-diff"), /--dsh-diff-caret:14px/, "the caret lost its size");
   assert.equal(closed[1].props.fill, "currentColor", "the caret ignores the theme colour");
   /* One path, so the two states cannot drift apart. */
   assert.equal(closed[1].props.d, open[1].props.d, "the two states draw different shapes");
@@ -546,16 +549,53 @@ await check("the disclosure triangle is drawn, and is one shape turned a quarter
 
 await check("the badge is a centred square, not a word or a tall box", () => {
   const badge = rule(".dsh-diff__badge");
-  const width = /width:\s*(\d+)px/.exec(badge);
-  const height = /height:\s*(\d+)px/.exec(badge);
+  const width = /width:var\((--dsh-diff-box)\)/.exec(badge);
+  const height = /height:var\((--dsh-diff-box)\)/.exec(badge);
   assert.ok(width !== null && height !== null, `the mark has no fixed box: ${badge}`);
-  assert.equal(width[1], height[1], `the mark's box is not square: ${width[1]}x${height[1]}`);
+  /* One variable for both edges is what keeps the box square as it scales. */
+  assert.equal(width[1], height[1], "the mark's box takes its edges from different variables");
   assert.ok(badge.includes("box-sizing:border-box"), "the mark's border would widen its box");
   assert.ok(badge.includes("justify-content:center"), "the mark is not centred horizontally");
   assert.ok(badge.includes("align-items:center"), "the mark is not centred vertically");
   assert.ok(badge.includes("inline-flex"), "the mark's box cannot centre a glyph without flex");
   /* No padding: a padded box would no longer measure square. */
   assert.ok(!/padding:[^;}]*[1-9]/.test(badge), `the mark's box is padded: ${badge}`);
+});
+
+await check("the panel keeps one fixed type scale, off the app's font-size preference", () => {
+  /* The diff deliberately reads at one size however the conversation is set, so
+     nothing here may read the preference the theme publishes on the body. */
+  const root = rule(".dsh-diff");
+  assert.match(root, /--dsh-diff-code:14px/, "the base size changed");
+  /* The chrome reads at the diff's own size, not a step under it. */
+  assert.match(root, /--dsh-diff-meta:var\(--dsh-diff-code\)/, "the chrome no longer reads at the diff's size");
+  assert.match(root, /--dsh-diff-micro:calc\(var\(--dsh-diff-code\) - 2px\)/, "the micro step is not derived");
+  assert.match(root, /--dsh-diff-strong:calc\(var\(--dsh-diff-code\) \+ 2px\)/, "the strong step is not derived");
+  assert.match(root, /font-size:var\(--dsh-diff-meta\)/, "the panel does not size its text from the scale");
+  /* The change itself is the panel's content, so it takes the largest step. */
+  assert.match(rule(".dsh-diff__line"), /font-size:var\(--dsh-diff-code\)/, "the diff body ignores the scale");
+  /* And the chrome matches it: toolbar, counts, and notices share that size. */
+  for (const selector of [".dsh-diff__action", ".dsh-diff__counts", ".dsh-diff__notice", ".dsh-diff__root"]) {
+    assert.match(rule(selector), /font-size:var\(--dsh-diff-meta\)/, `${selector} does not read at the chrome size`);
+  }
+  /* Nothing may pin a pixel size outside the scale, and nothing may follow the app. */
+  const pinned = installedCss().match(/font-size:\s*\d+px/g);
+  assert.equal(pinned, null, `a pinned font size bypasses the scale: ${String(pinned)}`);
+  /* Reading it is what is forbidden; the comment above the scale names it on
+     purpose, to record why the panel does not follow it. */
+  for (const token of ["var(--dsh-content-font-size", "var(--dsh-content-font-delta"]) {
+    assert.ok(!installedCss().includes(token), `the panel still follows the app setting through ${token}`);
+  }
+});
+
+await check("the gutter and the marks are sized to the same scale", () => {
+  const root = rule(".dsh-diff");
+  assert.match(root, /--dsh-diff-gutter:32px/, "the gutter lost its size");
+  assert.match(root, /--dsh-diff-mark:14px/, "the marks lost their size");
+  assert.match(root, /--dsh-diff-box:18px/, "the mark box lost its size");
+  assert.match(rule(".dsh-diff__no"), /width:var\(--dsh-diff-gutter\)/, "the gutter pins its width");
+  /* The drawn mark fills whatever box the scale gives it. */
+  assert.match(rule(".dsh-diff__badge svg"), /width:var\(--dsh-diff-mark\)/, "the drawn mark ignores the scale");
 });
 
 await check("the colour follows the symbol, so a mark means the same thing everywhere", () => {
