@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 
-import { collectWorkingTreeDiff, parseStatusEntries, parseNumstat, parseUnifiedPatch } from "../lib/git-diff.js";
+import { collectWorkingTreeDiff, hunksFromText, parseStatusEntries, parseNumstat, parseUnifiedPatch, readTextFile } from "../lib/git-diff.js";
 
 const exec = promisify(execFile);
 
@@ -134,7 +134,7 @@ try {
     assert.equal(result.state, "ok");
     assert.equal(result.branch, "main");
     assert.equal(result.files.length, 0);
-    assert.equal(result.untracked.length, 0);
+    assert.equal(result.counts.untracked, 0);
     assert.ok(result.head !== null);
   });
 
@@ -148,18 +148,128 @@ try {
     const result = await collectWorkingTreeDiff({ run: git, cwd: repo, signal: undefined });
     assert.equal(result.state, "ok");
     const byPath = new Map(result.files.map((file) => [file.path, file]));
-    assert.deepEqual([...byPath.keys()].sort(), ["keep.txt", "remove.txt", "staged.txt"]);
+    assert.deepEqual([...byPath.keys()].sort(), ["fresh.txt", "keep.txt", "remove.txt", "staged.txt"]);
     assert.equal(byPath.get("keep.txt").status, "modified");
     assert.equal(byPath.get("keep.txt").additions, 2);
     assert.equal(byPath.get("keep.txt").deletions, 1);
     assert.equal(byPath.get("keep.txt").unstaged, true);
     assert.equal(byPath.get("staged.txt").status, "added");
     assert.equal(byPath.get("remove.txt").status, "deleted");
-    assert.equal(result.counts.additions, 3);
+    assert.equal(result.counts.tracked, 3);
+    assert.equal(result.counts.untracked, 1);
+    assert.equal(result.counts.files, 4);
+    /* Untracked files carry their contents, and are grouped after the tracked ones. */
+    assert.deepEqual(result.files.map((file) => file.path), ["keep.txt", "remove.txt", "staged.txt", "fresh.txt"]);
+    const fresh = byPath.get("fresh.txt");
+    assert.equal(fresh.status, "untracked");
+    assert.equal(fresh.additions, 1);
+    assert.equal(fresh.deletions, 0);
+    assert.equal(fresh.note, null);
+    assert.deepEqual(fresh.hunks, [
+      { header: "@@ -0,0 +1,1 @@", lines: [{ kind: "add", text: "untracked", newLine: 1 }] }
+    ]);
+    /* Untracked additions join the running total. */
+    assert.equal(result.counts.additions, 4);
     assert.equal(result.counts.deletions, 2);
-    assert.deepEqual(result.untracked.map((entry) => entry.path), ["fresh.txt"]);
     assert.ok(byPath.get("keep.txt").hunks.length > 0);
     assert.equal(result.root, await realpath(repo));
+  });
+
+  /* --- untracked contents ------------------------------------------------- */
+  const loose = join(root, "untracked");
+  await mkdir(loose);
+  const looseGit = runIn(loose);
+  await exec("git", ["init", "-q", "-b", "main"], { cwd: loose });
+  await writeFile(join(loose, "plain.txt"), "alpha\nbeta\n");
+  await writeFile(join(loose, "no-newline.txt"), "tail");
+  await writeFile(join(loose, "crlf.txt"), "one\r\ntwo\r\n");
+  await writeFile(join(loose, "empty.txt"), "");
+  await writeFile(join(loose, "blob.bin"), Buffer.from([0x89, 0x50, 0x00, 0x47, 0x0d]));
+  await writeFile(join(loose, "big.txt"), "x".repeat(600 * 1024));
+
+  await check("hunksFromText presents a file as one all-additions hunk", () => {
+    assert.deepEqual(hunksFromText(""), []);
+    assert.deepEqual(hunksFromText("a\n"), [
+      { header: "@@ -0,0 +1,1 @@", lines: [{ kind: "add", text: "a", newLine: 1 }] }
+    ]);
+    /* A missing final newline is git's own annotation, and empty lines survive. */
+    assert.deepEqual(hunksFromText("a\n\nb"), [
+      {
+        header: "@@ -0,0 +1,3 @@",
+        lines: [
+          { kind: "add", text: "a", newLine: 1 },
+          { kind: "add", text: "", newLine: 2 },
+          { kind: "add", text: "b", newLine: 3 },
+          { kind: "meta", text: "No newline at end of file" }
+        ]
+      }
+    ]);
+    /* CRLF is normalised for display so no stray caret shows. */
+    assert.deepEqual(hunksFromText("a\r\nb\r\n")[0].lines, [
+      { kind: "add", text: "a", newLine: 1 },
+      { kind: "add", text: "b", newLine: 2 }
+    ]);
+  });
+
+  await check("untracked files carry their contents, not just their paths", async () => {
+    const result = await collectWorkingTreeDiff({ run: looseGit, cwd: loose, signal: undefined });
+    const byPath = new Map(result.files.map((file) => [file.path, file]));
+    assert.deepEqual([...byPath.keys()], ["big.txt", "blob.bin", "crlf.txt", "empty.txt", "no-newline.txt", "plain.txt"]);
+    assert.equal(result.counts.tracked, 0);
+    assert.equal(result.counts.untracked, 6);
+
+    const plain = byPath.get("plain.txt");
+    assert.equal(plain.status, "untracked");
+    assert.equal(plain.additions, 2);
+    assert.equal(plain.note, null);
+    assert.deepEqual(plain.hunks[0].lines, [
+      { kind: "add", text: "alpha", newLine: 1 },
+      { kind: "add", text: "beta", newLine: 2 }
+    ]);
+
+    const unterminated = byPath.get("no-newline.txt");
+    assert.equal(unterminated.additions, 1);
+    assert.equal(unterminated.hunks[0].lines[1].kind, "meta");
+
+    const crlf = byPath.get("crlf.txt");
+    assert.deepEqual(crlf.hunks[0].lines.map((line) => line.text), ["one", "two"]);
+
+    /* An empty file is neither binary nor an error: it says it is empty. */
+    const empty = byPath.get("empty.txt");
+    assert.deepEqual(empty.hunks, []);
+    assert.equal(empty.additions, 0);
+    assert.equal(empty.note, "empty-file");
+
+    const blob = byPath.get("blob.bin");
+    assert.equal(blob.binary, true);
+    assert.equal(blob.note, "binary");
+    assert.deepEqual(blob.hunks, []);
+
+    const big = byPath.get("big.txt");
+    assert.equal(big.note, "large");
+    assert.deepEqual(big.hunks, []);
+
+    assert.equal(result.counts.additions, 5);
+  });
+
+  await check("an unreadable untracked file is reported, never dropped", async () => {
+    const readFile = async (absolutePath, maxBytes) =>
+      absolutePath.endsWith("plain.txt") ? { kind: "unreadable" } : readTextFile(absolutePath, maxBytes);
+    const result = await collectWorkingTreeDiff({ run: looseGit, cwd: loose, signal: undefined, readFile });
+    const plain = result.files.find((file) => file.path === "plain.txt");
+    assert.equal(plain.note, "unreadable");
+    assert.deepEqual(plain.hunks, []);
+    assert.equal(result.files.length, 6);
+  });
+
+  await check("the untracked byte budget stops reading and says so", async () => {
+    /* Report every file as 3 MiB so the 4 MiB budget is spent after two reads. */
+    const readFile = async () => ({ kind: "text", text: "x\n", bytes: 3 * 1024 * 1024, truncated: false });
+    const result = await collectWorkingTreeDiff({ run: looseGit, cwd: loose, signal: undefined, readFile });
+    assert.deepEqual(result.files.map((file) => file.note), [null, null, "omitted", "omitted", "omitted", "omitted"]);
+    /* The skipped files still appear, so the list is never silently short. */
+    assert.equal(result.files.length, 6);
+    assert.equal(result.counts.untracked, 6);
   });
 
   await check("an unborn repository still reports its staged files", async () => {

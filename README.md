@@ -6,18 +6,20 @@ the tab-add ("+") guide lists **Git diff**, and choosing it opens a new tab
 whose body reads the session's working tree.
 
 When `<session cwd>/.git` exists, the tab shows the working tree's changes
-against `HEAD` — staged and unstaged together — plus the untracked files. When
-it does not, the tab shows the **Not a git project** state instead. All visible
-text goes through the client locale service, which ships an English and a
-Chinese dictionary.
+against `HEAD` — staged and unstaged together — and the untracked files, whose
+contents are read and presented too. When it does not, the tab shows the **Not a
+git project** state instead. All visible text goes through the client locale
+service, which ships an English and a Chinese dictionary.
 
 ## What it looks like
 
 | State | Body |
 |---|---|
 | git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file with status badge, hunks, and old/new line numbers |
+| tracked change | That file's hunks against `HEAD` |
+| untracked file | Its whole contents as one all-additions hunk, badged `untracked`; tracked changes are listed first, untracked files after |
+| file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
 | clean tree | "The working tree has no changes." |
-| untracked only | The same summary plus an untracked-files list |
 | no `.git` | "Not a git project" with the inspected directory |
 | git missing or failing | The error text and a retry button |
 
@@ -97,6 +99,14 @@ claimed as that repository. When `.git` is present the collector still probes
 `git rev-parse --show-toplevel` and runs every later command there, so a linked
 worktree or submodule reports repository-relative paths.
 
+**Untracked files.** git reports these as paths only, so the Host reads each one
+and builds the all-additions hunk git would have produced. The read is bounded:
+512 KiB per file, 4 MiB and 400 files per collection. A file past a cap is
+*refused*, not truncated — half a file under plausible line numbers is worse
+than an honest reason — and every untracked path still appears in the list with
+its `note` set to `binary`, `large`, `unreadable`, or `omitted`. An empty file is
+none of those: it reports `empty-file` and nothing else.
+
 **Bounded work.** stdout is collected under an 8 MiB cap (a larger patch is
 reported as truncated), stderr under 256 KiB, and the whole collection is
 abandoned after 20 s or when the client disconnects. git runs with
@@ -106,7 +116,6 @@ block on a credential prompt, take the index lock, or emit localized output.
 **Rendering.** Pushes are parsed host-side into hunks with per-line old/new
 numbers, so the browser does no diff parsing. Files start collapsed when a diff
 exceeds 1200 lines, and no single file renders more than 2500 lines.
-
 ## Test
 
 ```
@@ -115,9 +124,10 @@ node test/host-route.mjs  # the HTTP route, end to end
 ```
 
 `smoke.mjs` builds throwaway repositories in the OS temp directory and
-exercises the parser and the collector: clean, dirty, staged, untracked,
-unborn, binary, renamed, quoted paths, a directory with no `.git`, and a missing
-git executable.
+exercises the parser and the collector: clean, dirty, staged, untracked with
+contents, unborn, binary, renamed, quoted paths, CRLF, a file with no final
+newline, an empty file, a file past the preview cap, an unreadable file, the
+untracked budget, a directory with no `.git`, and a missing git executable.
 
 `host-route.mjs` mounts `lib/index.js` on a stub Cordis context whose
 `subprocess` runs real git, then drives the registered handler with fake
