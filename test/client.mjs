@@ -356,10 +356,11 @@ await check("the stylesheet is installed once, tagged with the package", () => {
 });
 
 await check("a hot reload refreshes the existing stylesheet instead of pinning the first one", () => {
-  /* The bug this guards: the factory re-runs on a client hot reload while the
-     previous style tag survives, so creating the tag only when absent pinned
-     whichever CSS the first load carried and every later edit applied to
-     nothing until a full page refresh. */
+  /* The branch this guards: the factory re-runs on a client hot reload, and the
+     bundle refreshes whatever tag it finds rather than creating one only when
+     absent. Production normally takes the append path instead — the Harness's
+     module system removes a plugin's owned styles before re-importing it — so
+     this drives the other one, and neither can leave stale CSS behind. */
   styles.tag.textContent = "/* the stylesheet from an earlier load */";
   loadBundle();
   assert.equal(styles.appends, 1, "the reload appended a second style tag");
@@ -746,7 +747,8 @@ await check("the disclosure triangle is drawn, and is one shape turned a quarter
   assert.ok(svg.props.width >= 12, `the caret is still too small: ${svg.props.width}px`);
   assert.equal(svg.props["aria-hidden"], "true", "the caret is announced as text");
   /* The size the stylesheet enforces has to agree with the drawing, and it may
-     not pin pixels: the whole panel tracks the app's font-size preference. */
+     not pin pixels: the panel keeps its own fixed scale rather than tracking the
+     app's font-size preference. */
   const caretRule = rule(".dsh-diff__caret");
   assert.match(caretRule, /width:var\(--dsh-diff-caret\)/, "the stylesheet does not size the caret from the scale");
   assert.match(caretRule, /height:var\(--dsh-diff-caret\)/, "the caret has no height of its own");

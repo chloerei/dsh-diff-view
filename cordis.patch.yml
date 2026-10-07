@@ -2,8 +2,8 @@
 #
 # The Host half registers the read-only `GET /dsh-diff-view/diff` route; the
 # browser half (`dsh.client` in package.json) registers the right sidebar's
-# `git-diff` tab type against that same row. Selecting this bundle appends the
-# row to the profile tree; it needs no other layer.
+# `dsh-diff-view` tab type against that same row. Selecting this bundle appends
+# the row to the profile tree; it needs no other layer.
 - insert:
     - id: diff-view
       name: 'dsh-diff-view'

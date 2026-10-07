@@ -43,7 +43,7 @@ tab is already open it is focused rather than duplicated.
 | `lib/index.js` | Host half: the read-only `GET /dsh-diff-view/diff` route and the `GET /dsh-diff-view/events` stream |
 | `lib/git-diff.js` | Host half: pure git collection, the change fingerprint, and unified-diff parsing |
 | `lib/diff-watch.js` | Host half: when a change is worth collecting, and which directories to watch |
-| `lib/client.js` | Browser half: the `git-diff` tab type, its body, and its subscription |
+| `lib/client.js` | Browser half: the `dsh-diff-view` tab type, its body, and its subscription |
 | `test/smoke.mjs` | Host-half checks against throwaway repositories |
 | `test/watch.mjs` | Host-half checks for the change detector, over fakes |
 | `test/host-route.mjs` | Host-half checks that drive the registered routes |
@@ -77,24 +77,27 @@ Then open a session and use **+** in the right sidebar's tab strip.
 
 The two halves reload differently.
 
-**`lib/client.js` — live, no restart.** `dsh-client-hmr` polls every registered
-client bundle (500 ms by default) and watches the files `dsh-client-modules`
-advertises. A changed byte makes the Host publish a `rebuilt` frame on its
-`/plugins/events` stream, and the open page swaps the module in place; reopening
-the tab is enough.
+**`lib/client.js` — live, no restart.** `dsh-client-hmr` stat-polls the bundle
+artifact `dsh-client-modules` reports for every graph row (500 ms by default). A
+changed artifact makes the Host publish a `rebuilt` frame on its `/plugins/events`
+stream, and the open page swaps the module in place; reopening the tab is enough.
 
-That reload re-runs the bundle's factory **in place**, and the style tag it
-installed on the first load survives. Installing the stylesheet only when no tag
-exists would therefore pin whichever CSS the first load happened to carry, and
-every later edit would apply to nothing until a full page refresh. The bundle
-updates an existing tag instead, which `test/client.mjs` pins.
+That reload re-runs the bundle's factory against the same page, and the Harness
+owns the `<style>` tags a factory injects: `dsh-client-modules` claims them for
+the plugin that made them and removes them when it replaces that plugin's module
+— `removeOwnedStyles` runs after the old fiber is torn down and before the bundle
+is imported — so a reload normally starts with no tag of this plugin's on the
+page. The bundle writes unconditionally either way: it refreshes an existing tag
+in place when one is there, and appends one when it is not, so the stylesheet can
+never be a generation behind. `test/client.mjs` drives both paths.
 
 **`lib/index.js`, `lib/git-diff.js`, and `lib/diff-watch.js` — restart.** The
-profile's HMR watches composition files (`package.json`, `cordis.patch.yml`),
-not host module source, and the loader imports host halves with a plain
-`import()` and no cache-busting URL. Toggling the bundle off and on re-runs its
-lifecycle but still hands back the already-imported module generation, so an
-application restart is the reliable answer.
+profile's HMR runs with `root: []`, so it watches composition files
+(`package.json`, `cordis.patch.yml`) and not host module source: an edit under
+`lib/` raises no reload at all. Toggling the bundle off and on re-runs the row's
+lifecycle, but the module `import()` the Loader already performed is still in its
+cache, so it hands back the old host half just the same. An application restart
+is the reliable answer.
 
 That ordering is survivable rather than a trap for the event stream: a browser
 half that finds no `GET /dsh-diff-view/events` on the Host it is talking to
@@ -190,12 +193,15 @@ command would lose the hint silently, so the client check ties the two together.
 mounted session, so the key works from the composer too, and reports a blocked
 command rather than throwing when no session is mounted.
 
-**Type scale.** Every size in the panel derives from one local scale, and the
+**Type scale.** Every size in the panel comes from one local scale, and the
 scale is fixed: the diff reads at one size however the conversation is set.
-`--dsh-diff-code` is the single number (14px); `--dsh-diff-meta` is the chrome's
-own name for that same size, so the toolbar, the counts, and the notices read at
-it too; and the gutter, the marks, and the glyph boxes are sized to match.
-Changing that one number resizes the whole panel, text and geometry together.
+`--dsh-diff-code` is the base text number (14px) and `--dsh-diff-meta` is the
+chrome's own name for that same size, so the toolbar, the counts, and the notices
+read at it too; `--dsh-diff-strong` is the one step above it, for an empty
+state's title. The geometry keeps its own fixed numbers, chosen to match rather
+than derived: `--dsh-diff-caret`, `--dsh-diff-mark`, `--dsh-diff-box`, and
+`--dsh-diff-gutter`. Changing the text size alone therefore leaves the gutter and
+the marks where they are.
 
 The panel deliberately does **not** read `--dsh-content-font-size`, the
 preference the theme publishes on the body for Settings → Font size. Following it
@@ -328,16 +334,17 @@ moves by hand, a collector that counts its calls, and watches the test fires —
 because the property worth asserting is a cost: a working tree nobody is
 watching runs nothing at all, an idle tree is probed but never collected, an
 event that changes nothing the panel draws costs one probe, a payload already on
-screen is never pushed, the watched set follows the payload within its cap, and
-the last viewer takes the timers and the watches with it.
+screen is never pushed, the watched set follows the payload within its cap, an
+unwatchable directory is reported rather than fatal, and the last viewer takes
+the timers and the watches with it.
 
 `host-route.mjs` mounts `lib/index.js` on a stub Cordis context whose
 `subprocess` runs real git, then drives the registered handlers with fake
 request/response objects: an authorized diff, the `?path=` override, the non-git
 project state, the missing-directory 404, the sandbox-policy fallback, the
 authorization fence, and the 405 for a non-GET method — then the event stream,
-which is opened, fed a real change on disk, and closed. A failing watch is
-reported rather than fatal, and unloading the plugin ends the streams it holds.
+which is opened, fed a real change on disk, and closed; unloading the plugin ends
+the streams it holds.
 
 `client.mjs` loads `lib/client.js` through a stub `__ModuleLoader__` and a stub
 `require`, then renders the presentational pieces the bundle exposes as a test
