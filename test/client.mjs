@@ -280,10 +280,26 @@ function byClass(result, className) {
   );
 }
 
+/**
+ * Every host element of a mounted tree, resolved the way React would.
+ *
+ * A component under test may be mounted through the hook runtime rather than
+ * {@link render}, and an effect-driven render leaves the tree on the root; this
+ * is how those trees are queried with {@link byClass}.
+ *
+ * @param tree - a mounted tree, or any fragment of one.
+ * @returns the elements it draws.
+ */
+function elementsOf(tree) {
+  const elements = [];
+  walk(tree, (node) => elements.push(node));
+  return elements;
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const source = await readFile(join(here, "..", "lib", "client.js"), "utf8");
 const bundle = loadBundle();
-const { Caret, Gutter, Hunks, FileBlock, Mark, DiffView, payloadKey } = bundle.__internals;
+const { Caret, ToggleIcon, Gutter, Hunks, FileBlock, Mark, DiffView, payloadKey } = bundle.__internals;
 
 /**
  * The mark geometry the bundle draws, mirrored here so the assertions name the
@@ -326,6 +342,7 @@ await check("the factory exposes apply, inject, and the test seam", () => {
   assert.equal(typeof FileBlock, "function");
   assert.equal(typeof Mark, "function");
   assert.equal(typeof Caret, "function");
+  assert.equal(typeof ToggleIcon, "function");
   assert.equal(typeof DiffView, "function");
   assert.equal(typeof payloadKey, "function");
 });
@@ -741,6 +758,31 @@ await check("the disclosure triangle is drawn, and is one shape turned a quarter
   assert.match(String(open[1].props.transform), /rotate\(90 5 5\)/, "the expanded caret is not turned about the grid centre");
 });
 
+await check("the all-files glyph is drawn, and reads the other way per state", () => {
+  /* Drawn for the same reason as the marks and the caret: the glyph pair this
+     would otherwise use is four characters with four sets of bearings. */
+  const strokes = (result) => result.elements.filter((node) => node.type === "path").map((node) => node.props.d);
+  const expand = render(ToggleIcon, { expand: true });
+  const collapse = render(ToggleIcon, { expand: false });
+  const svg = expand.elements[0];
+  assert.equal(svg.type, "svg", "the glyph is not drawn");
+  assert.equal(svg.props["aria-hidden"], "true", "the glyph is announced as text; the button owns the word");
+  assert.equal(svg.props.width, svg.props.height, "the glyph canvas is not square");
+  assert.equal(svg.props.stroke, "currentColor", "the glyph ignores the button's colour");
+  assert.equal(svg.props.fill, "none", "the glyph is filled rather than stroked");
+  assert.equal(strokes(expand).length, 2, "the expand state is not two chevrons");
+  assert.equal(strokes(collapse).length, 2, "the collapse state is not two chevrons");
+  /* Four distinct strokes: the states are not one shape reused, and no chevron
+     is shared, so the two weigh the same. */
+  assert.equal(new Set([...strokes(expand), ...strokes(collapse)]).size, 4, "a stroke is shared between the two states");
+  /* The button is a square hit area around that glyph. */
+  const button = rule(".dsh-diff__toggle");
+  assert.match(button, /width:24px/, "the toggle has no width");
+  assert.match(button, /height:24px/, "the toggle has no height");
+  assert.match(button, /padding:0/, "padding would break the square hit area");
+  assert.match(rule(".dsh-diff__toggle svg"), /width:16px/, "the glyph is not sized by the button");
+});
+
 await check("the badge is a centred square, not a word or a tall box", () => {
   const badge = rule(".dsh-diff__badge");
   const width = /width:var\((--dsh-diff-box)\)/.exec(badge);
@@ -892,19 +934,94 @@ await check("the panel reads the route on mount and draws what it returns", asyn
   assert.equal(streams[0].closed, true, "unmounting left the change stream open");
 });
 
-await check("the toolbar offers no manual refresh, which the stream already does", async () => {
-  /* The toolbar used to carry one, and pressing it blanked the whole panel back
-     to its loading state for a re-read the event stream performs on its own. */
+await check("the toolbar offers no manual refresh, only the all-files toggle", async () => {
+  /* The toolbar used to carry a refresh button, and pressing it blanked the
+     whole panel back to its loading state for a re-read the event stream
+     performs on its own. The one control that belongs there is the toggle. */
   const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
   await settle();
-  const elements = [];
-  walk(view.tree, (node) => elements.push(node));
-  const [bar] = byClass({ elements }, "dsh-diff__bar");
+  const [bar] = byClass({ elements: elementsOf(view.tree) }, "dsh-diff__bar");
   assert.ok(bar !== undefined, "the panel drew no toolbar");
-  const inside = [];
-  walk(bar.props.children, (node) => inside.push(node));
-  assert.equal(inside.filter((node) => node.type === "button").length, 0, "the toolbar still offers a refresh control");
-  assert.equal(byClass({ elements: inside }, "dsh-diff__action").length, 0, "the toolbar still draws an action");
+  const inside = elementsOf(bar.props.children);
+  assert.equal(byClass({ elements: inside }, "dsh-diff__action").length, 0, "the toolbar still draws a text action");
+  assert.deepEqual(
+    inside.filter((node) => node.type === "button").map((node) => node.props.className),
+    ["dsh-diff__toggle"],
+    "the toolbar carries a control that is not the all-files toggle"
+  );
+  view.unmount();
+});
+
+await check("the toolbar toggle closes every file, then opens them again", async () => {
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const toggle = () => byClass({ elements: elementsOf(view.tree) }, "dsh-diff__toggle")[0];
+  const hunks = () => byClass({ elements: elementsOf(view.tree) }, "dsh-diff__hunk").length;
+
+  /* The fixture is under the expand-all limit, so it starts fully open and the
+     control therefore offers the opposite: collapse. */
+  assert.equal(hunks(), 1, "the file did not start open");
+  assert.equal(toggle().props["aria-label"], "collapseAll", "a fully open panel did not offer to collapse");
+  assert.equal(toggle().props.title, "collapseAll", "the tooltip disagrees with the label");
+  assert.equal(toggle().props.children.props.expand, false, "the collapse state drew the expand glyph");
+
+  toggle().props.onClick();
+  assert.equal(hunks(), 0, "the toggle left a file open");
+  assert.equal(toggle().props["aria-label"], "expandAll", "a fully closed panel did not offer to expand");
+  assert.equal(toggle().props.children.props.expand, true, "the expand state drew the collapse glyph");
+
+  toggle().props.onClick();
+  assert.equal(hunks(), 1, "the toggle did not open the file again");
+  assert.equal(toggle().props["aria-label"], "collapseAll", "the label did not come back around");
+  view.unmount();
+});
+
+await check("the toggle's answer sticks, and covers a file that arrives later", async () => {
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const toggle = () => byClass({ elements: elementsOf(view.tree) }, "dsh-diff__toggle")[0];
+  const hunks = () => byClass({ elements: elementsOf(view.tree) }, "dsh-diff__hunk").length;
+
+  toggle().props.onClick();
+  assert.equal(hunks(), 0, "the toggle left a file open");
+  /* The answer is the panel's, not a snapshot of the paths that were on screen:
+     a path the reader has never ruled on follows it too, where the size rule
+     would have opened the file. */
+  streams.at(-1).emit("diff", {
+    data: JSON.stringify({ ...readyPayload, files: [{ ...trackedFile, path: "late.txt" }], generatedAt: "later" })
+  });
+  assert.ok(textOf(view.tree).includes("late.txt"), "the later payload never reached the panel");
+  assert.equal(hunks(), 0, "a file that arrived later opened itself");
+  assert.equal(toggle().props["aria-label"], "expandAll", "the later file flipped the panel's answer");
+  view.unmount();
+});
+
+await check("expand all drops the per-file answers it overrides", async () => {
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const toggle = () => byClass({ elements: elementsOf(view.tree) }, "dsh-diff__toggle")[0];
+  const hunks = () => byClass({ elements: elementsOf(view.tree) }, "dsh-diff__hunk").length;
+
+  /* A row's own caret is the per-path answer; the toolbar's has to win over it,
+     or "expand all" would leave a file the reader closed by hand still shut. */
+  const [head] = byClass({ elements: elementsOf(view.tree) }, "dsh-diff__fileHead");
+  head.props.onClick();
+  assert.equal(hunks(), 0, "the caret did not close the file");
+  assert.equal(toggle().props["aria-label"], "expandAll", "a closed file did not offer to expand");
+
+  toggle().props.onClick();
+  assert.equal(hunks(), 1, "expand all left a file closed by hand");
+  view.unmount();
+});
+
+await check("a clean tree draws no toggle, since there is nothing to open", async () => {
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  streams.at(-1).emit("diff", {
+    data: JSON.stringify({ ...readyPayload, files: [], counts: { ...readyPayload.counts, files: 0, tracked: 0, additions: 0, deletions: 0 } })
+  });
+  assert.ok(textOf(view.tree).includes("clean"), "the clean notice is missing");
+  assert.equal(byClass({ elements: elementsOf(view.tree) }, "dsh-diff__toggle").length, 0, "a clean tree still offered the toggle");
   view.unmount();
 });
 

@@ -25,7 +25,7 @@ tab is already open it is focused rather than duplicated.
 
 | State | Body |
 |---|---|
-| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and a two-column line-number gutter |
+| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and a two-column line-number gutter, plus one toolbar toggle that opens or closes every file |
 | tracked change | That file's hunks against `HEAD` |
 | untracked file | Its whole contents as one all-additions hunk, marked `+` with a dashed border; tracked changes are listed first, untracked files after |
 | file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
@@ -150,6 +150,24 @@ grid, and is one path used twice: the expanded state is the same triangle turned
 a quarter turn about the grid centre, so the two cannot drift apart. It replaces
 the `▸`/`▾` glyph pair, which rendered as a sliver at any font size small enough
 to fit the row.
+
+**The all-files toggle.** The toolbar's one control is an icon button that opens
+or closes every file at once. It reads the same per-file open state the carets
+drive and always states the *other* action: with every file open it offers to
+collapse, with anything closed it offers to expand. A clean tree draws no toggle,
+because there is nothing to open. The glyph is drawn rather than typed — two
+chevrons pointing outward to expand and inward to collapse, the
+unfold-more/unfold-less pair a reader already knows, on the same stroke weight as
+the caret so neither looks heavier than the other.
+
+Its answer is the **panel's**, not a snapshot of the paths that were on screen
+when it was pressed: once used it stands in for the size rule on every path the
+reader has not ruled on individually, so a file that only turns up in a later
+payload opens or stays shut the way the button said rather than by the line count
+it happened to arrive with. That is also why using it drops the per-file answers
+it overrides — leaving them would contradict the panel and make "expand all" a
+lie for a file the reader had closed by hand. Pressing a row's own caret
+afterwards is a per-path answer again, on top of the panel's.
 
 **One tab, not many.** The type is registered `multiple: false`. A
 multi-instance type mints a fresh address per open (`<page>/<uuid>`), so every
@@ -278,8 +296,8 @@ scrolling sideways: the panel is narrow, and a horizontal scrollbar in it hides
 more than it reveals. `white-space:pre-wrap` keeps each line's own indentation
 while wrapping, and `overflow-wrap:anywhere` breaks the unbroken tokens —
 minified JavaScript, long URLs — that would otherwise still overflow. Files start
-collapsed when a diff exceeds 1200 lines, and no single file renders more than
-2500 lines.
+collapsed when a diff exceeds 1200 lines — until the toolbar's toggle settles the
+question for the whole panel — and no single file renders more than 2500 lines.
 
 A file's heading **sticks** to the top of that scrolling body while its own
 hunks pass under it, so a long file keeps naming itself instead of letting the
@@ -331,7 +349,10 @@ asserts that both of each hunk line's numbers reach their own gutter column, tha
 the line is laid out on two number tracks with the changed rows wearing the
 built-in file-diff fill and the 3px leading marker, that signs, row tints, hunk
 headers, and untracked contents are drawn, that a collapsed block draws no hunk,
-and that each `note` renders an explanation instead of nothing.
+that the toolbar's one toggle closes every file and opens them again while
+stating the action it offers, that its answer also covers a path which only
+arrives with the next payload and outranks a file closed by hand, and that each
+`note` renders an explanation instead of nothing.
 For auto-refresh it asserts that a pushed diff replaces what the panel draws
 without a second read, that a payload already on screen is not redrawn, that a
 `changed` notice re-reads the route, that a failed stream hands over to the slow
