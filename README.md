@@ -274,6 +274,12 @@ minified JavaScript, long URLs — that would otherwise still overflow. Files st
 collapsed when a diff exceeds 1200 lines, and no single file renders more than
 2500 lines.
 
+A file's heading **sticks** to the top of that scrolling body while its own
+hunks pass under it, so a long file keeps naming itself instead of letting the
+reader scroll its path out of sight. The heading's fill is opaque and paints
+above the lines, and its section bounds it, so the top is handed on as the next
+file arrives.
+
 ## Test
 
 ```

@@ -385,6 +385,17 @@ await check("the diff body is inset from the panel edges", () => {
   assert.match(rule(".dsh-diff__hunkHead"), /padding:\s*\S+\s+\S+/, "the hunk header lost its inset");
 });
 
+await check("a file heading sticks to the top of the panel while its hunks pass", () => {
+  const head = rule(".dsh-diff__fileHead");
+  assert.match(head, /position:sticky/, "the file heading scrolls away with its file");
+  assert.match(head, /top:0/, "the stuck heading does not pin to the top edge");
+  /* Lines slide under it, so its fill has to be opaque and paint above them. */
+  assert.match(head, /background:var\(--dsw-alias-bg-layer-1\)/, "the stuck heading would show the diff through it");
+  assert.match(head, /z-index:\d/, "the heading does not paint above the lines it covers");
+  /* And it is the panel body, not the page, that does the scrolling. */
+  assert.match(rule(".dsh-diff__scroll"), /overflow:auto/, "the panel body is not the scroll container");
+});
+
 /** Everything one `apply` call registered. */
 const calls = { locale: [], tabs: [], slots: [], shortcuts: [] };
 
