@@ -247,6 +247,13 @@ If the stream cannot be established at all — an older Host that does not serve
 it, a proxy that eats it — the panel falls back to reading the route itself
 every 20 s, and only while the page is visible, rather than going quietly stale.
 
+There is deliberately **no manual refresh**: the stream owns the update, and a
+button that re-read the route would only blank the panel back to its loading
+state for a refresh already on its way. The toolbar therefore carries the branch
+and the root and nothing to press. The two states that have nothing else on
+screen keep their own button — retry after a failed read, refresh when there is
+no repository — because those are recovery steps, not a second way to poll.
+
 **Rendering.** Pushes are parsed host-side into hunks carrying per-line numbers,
 so the browser does no diff parsing and no number arithmetic. Each hunk line
 carries `oldLine` and `newLine` as the Host read them — a deletion has an

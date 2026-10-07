@@ -892,6 +892,22 @@ await check("the panel reads the route on mount and draws what it returns", asyn
   assert.equal(streams[0].closed, true, "unmounting left the change stream open");
 });
 
+await check("the toolbar offers no manual refresh, which the stream already does", async () => {
+  /* The toolbar used to carry one, and pressing it blanked the whole panel back
+     to its loading state for a re-read the event stream performs on its own. */
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const elements = [];
+  walk(view.tree, (node) => elements.push(node));
+  const [bar] = byClass({ elements }, "dsh-diff__bar");
+  assert.ok(bar !== undefined, "the panel drew no toolbar");
+  const inside = [];
+  walk(bar.props.children, (node) => inside.push(node));
+  assert.equal(inside.filter((node) => node.type === "button").length, 0, "the toolbar still offers a refresh control");
+  assert.equal(byClass({ elements: inside }, "dsh-diff__action").length, 0, "the toolbar still draws an action");
+  view.unmount();
+});
+
 await check("a pushed diff replaces what the panel draws, with no second read", async () => {
   reads.length = 0;
   streams.length = 0;
