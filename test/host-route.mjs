@@ -70,23 +70,39 @@ function spawnReal(spec) {
 }
 
 /**
- * Build the plugin's context stub and capture its route.
- * @param options - the session cwd lookup and the rejection the fence reports.
- * @returns the captured route plus the recorded spawn spec.
+ * Build the plugin's context stub and capture its routes.
+ * @param options - the session cwd lookup, the rejection the fence reports, and
+ *   the filesystem stub the event stream arms watches through.
+ * @returns the captured routes plus the recorded spawns and watches.
  */
 function mountPlugin(options = {}) {
-  const state = { route: undefined, spawns: [], effects: 0 };
+  const state = { routes: new Map(), spawns: [], watchers: new Map(), effects: 0, disposed: 0 };
+  state.fs = fakeFs(state);
   const ctx = {
     effect(fn, label) {
       state.effects += 1;
       void label;
       const dispose = fn();
-      return typeof dispose === "function" ? dispose : () => {};
+      state.dispose = typeof dispose === "function" ? dispose : () => {};
+      return state.dispose;
     },
-    get: (key) => (key === "sandboxPolicy" ? options.sandboxPolicy : options.sessionPersistence),
+    get: (key) => {
+      if (key === "sandboxPolicy") return options.sandboxPolicy;
+      if (key === "sessionPersistence") return options.sessionPersistence;
+      if (key === "fs") return options.fs === undefined ? state.fs : options.fs;
+      return undefined;
+    },
     sessions: { get: (id) => (options.sessionCwd === undefined ? undefined : { header: { id, cwd: options.sessionCwd } }) },
     connection: { requestRejection: () => options.rejection },
-    webServer: { register: (route) => ((state.route = route), () => {}) },
+    webServer: {
+      register: (route) => {
+        state.routes.set(route.path, route);
+        return () => {
+          state.disposed += 1;
+          state.routes.delete(route.path);
+        };
+      },
+    },
     subprocess: {
       resolveExecutable: async (command) => command,
       spawn: (spec) => {
@@ -100,53 +116,130 @@ function mountPlugin(options = {}) {
 }
 
 /**
- * A fake Node response that records everything the handler writes.
- * @returns the response plus a promise for its completion.
+ * The filesystem stub the event stream resolves and watches directories with.
+ * @param state - the mounted plugin state, which records the watches.
+ * @returns the stub `ctx.fs`.
  */
-function fakeResponse() {
-  const chunks = [];
-  let settle;
-  const finished = new Promise((resolve) => {
-    settle = resolve;
-  });
-  const headers = new Map();
+function fakeFs(state) {
   return {
-    statusCode: undefined,
-    headers,
-    writableEnded: false,
-    on() {},
-    off() {},
-    setHeader(key, value) {
-      headers.set(key, value);
-    },
-    write(chunk) {
-      chunks.push(String(chunk));
-    },
-    end(chunk) {
-      if (chunk !== undefined) chunks.push(String(chunk));
-      this.writableEnded = true;
-      settle();
-    },
-    finished,
-    json() {
-      const raw = chunks.join("");
-      return raw === "" ? null : JSON.parse(raw);
+    resolve: async (path) => ({ targetKey: path, displayPath: path }),
+    watch: async (target, changed) => {
+      state.watchers.set(target.displayPath, changed);
+      return async () => {
+        state.watchers.delete(target.displayPath);
+      };
     },
   };
 }
 
 /**
- * Drive the captured route once.
+ * A fake Node response that records everything the handler writes.
+ *
+ * It is a small emitter rather than a stub with no-op listeners, because the
+ * event stream's teardown hangs off `close` and `error` and has to be drivable.
+ *
+ * @returns the response plus a promise for its completion.
+ */
+function fakeResponse() {
+  const chunks = [];
+  const listeners = new Map();
+  let settle;
+  const finished = new Promise((resolve) => {
+    settle = resolve;
+  });
+  const headers = new Map();
+  const res = {
+    statusCode: undefined,
+    headers,
+    writableEnded: false,
+    destroyed: false,
+    on(event, handler) {
+      const list = listeners.get(event) ?? [];
+      list.push(handler);
+      listeners.set(event, list);
+      return res;
+    },
+    off(event, handler) {
+      const list = listeners.get(event) ?? [];
+      const index = list.indexOf(handler);
+      if (index >= 0) list.splice(index, 1);
+      return res;
+    },
+    emit(event) {
+      for (const handler of [...(listeners.get(event) ?? [])]) handler();
+    },
+    writeHead(status, extra) {
+      res.statusCode = status;
+      for (const [key, value] of Object.entries(extra ?? {})) headers.set(key, value);
+      return res;
+    },
+    setHeader(key, value) {
+      headers.set(key, value);
+    },
+    write(chunk) {
+      chunks.push(String(chunk));
+      return true;
+    },
+    end(chunk) {
+      if (chunk !== undefined) chunks.push(String(chunk));
+      res.writableEnded = true;
+      settle();
+    },
+    finished,
+    text() {
+      return chunks.join("");
+    },
+    json() {
+      const raw = res.text();
+      return raw === "" ? null : JSON.parse(raw);
+    },
+  };
+  return res;
+}
+
+/**
+ * Drive the captured diff route once.
  * @param state - the mounted plugin state.
  * @param request - method, url, and any headers.
  * @returns the status code and parsed body.
  */
 async function call(state, request) {
-  assert.ok(state.route !== undefined, "the plugin registered no route");
+  const route = state.routes.get(request.path ?? "/dsh-diff-view/diff");
+  assert.ok(route !== undefined, `the plugin registered no route for ${request.path ?? "/dsh-diff-view/diff"}`);
   const res = fakeResponse();
-  await state.route.handler({ method: request.method ?? "GET", url: request.url, headers: request.headers ?? {} }, res);
+  await route.handler({ method: request.method ?? "GET", url: request.url, headers: request.headers ?? {} }, res);
   await res.finished;
   return { status: res.statusCode, body: res.json() };
+}
+
+/**
+ * Wait until a condition holds.
+ * @param predicate - `() => boolean`.
+ * @param label - what is being waited for.
+ */
+async function until(predicate, label) {
+  for (let turn = 0; turn < 200; turn += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+/** One turn of the event loop, so scheduled work can run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Every diff payload an event stream has pushed so far.
+ * @param res - the fake response the stream writes into.
+ * @returns the parsed payloads, in order.
+ */
+function diffFrames(res) {
+  const prefix = "event: diff\ndata: ";
+  return res
+    .text()
+    .split("\n\n")
+    .filter((block) => block.startsWith(prefix))
+    .map((block) => JSON.parse(block.slice(prefix.length)));
 }
 
 const root = await mkdtemp(join(tmpdir(), "dsh-diff-view-route-"));
@@ -171,11 +264,13 @@ try {
     assert.ok(inject.includes("subprocess"));
   });
 
-  await check("the route is registered as an exact GET path", () => {
+  await check("the routes are registered as exact paths, over one effect", () => {
     const state = mountPlugin();
-    assert.equal(state.route.kind, "exact");
-    assert.equal(state.route.path, "/dsh-diff-view/diff");
-    assert.equal(typeof state.route.handler, "function");
+    assert.deepEqual([...state.routes.keys()].sort(), ["/dsh-diff-view/diff", "/dsh-diff-view/events"]);
+    for (const route of state.routes.values()) {
+      assert.equal(route.kind, "exact");
+      assert.equal(typeof route.handler, "function");
+    }
     assert.equal(state.effects, 1);
   });
 
@@ -252,6 +347,89 @@ try {
     const { status } = await call(state, { method: "POST", url: "/dsh-diff-view/diff?sessionId=session-1" });
     assert.equal(status, 405);
     assert.equal(state.spawns.length, 0);
+  });
+
+  /* --- the event stream --------------------------------------------------- */
+  await check("the stream answers with an event stream, not a body", async () => {
+    const state = mountPlugin({ sessionCwd: repo });
+    const res = fakeResponse();
+    await state.routes
+      .get("/dsh-diff-view/events")
+      .handler({ method: "GET", url: "/dsh-diff-view/events?sessionId=session-1", headers: {} }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers.get("content-type"), "text/event-stream");
+    await until(() => res.text().includes("event: diff"), "the first pushed frame");
+    assert.match(res.text(), /^: connected\n\n/);
+    const [payload] = diffFrames(res);
+    assert.equal(payload.state, "ok");
+    assert.equal(payload.cwd, repo);
+    assert.equal(typeof payload.generatedAt, "string");
+    assert.ok(state.watchers.size > 0, "the stream armed no directory watch");
+    res.emit("close");
+    await until(() => state.watchers.size === 0, "the watches to close");
+  });
+
+  await check("the stream pushes again when the working tree changes", async () => {
+    const state = mountPlugin({ sessionCwd: repo });
+    const res = fakeResponse();
+    await state.routes
+      .get("/dsh-diff-view/events")
+      .handler({ method: "GET", url: "/dsh-diff-view/events?sessionId=session-1", headers: {} }, res);
+    await until(() => diffFrames(res).length === 1, "the first pushed frame");
+    assert.ok(!diffFrames(res)[0].files.some((file) => file.path === "streamed.txt"), "the fixture started dirty");
+
+    await writeFile(join(repo, "streamed.txt"), "pushed\n");
+    /* The watch is what the Host's filesystem service would have fired. */
+    for (const changed of [...state.watchers.values()]) changed();
+    await until(() => diffFrames(res).length === 2, "the pushed change");
+    const pushed = diffFrames(res)[1];
+    assert.ok(pushed.files.some((file) => file.path === "streamed.txt"), "the new file was not pushed");
+    res.emit("close");
+    await until(() => state.watchers.size === 0, "the watches to close");
+    await rm(join(repo, "streamed.txt"));
+  });
+
+  await check("the stream is fenced, method-checked, and needs a directory", async () => {
+    const fenced = mountPlugin({ sessionCwd: repo, rejection: 403 });
+    const refused = fakeResponse();
+    await fenced.routes
+      .get("/dsh-diff-view/events")
+      .handler({ method: "GET", url: "/dsh-diff-view/events?sessionId=session-1", headers: {} }, refused);
+    assert.equal(refused.statusCode, 403);
+    assert.equal(fenced.spawns.length, 0, "the fence let a git process run");
+
+    const posted = mountPlugin({ sessionCwd: repo });
+    const wrongMethod = fakeResponse();
+    await posted.routes
+      .get("/dsh-diff-view/events")
+      .handler({ method: "POST", url: "/dsh-diff-view/events?sessionId=session-1", headers: {} }, wrongMethod);
+    assert.equal(wrongMethod.statusCode, 405);
+    assert.equal(posted.spawns.length, 0);
+
+    const homeless = mountPlugin();
+    const lost = fakeResponse();
+    await homeless.routes
+      .get("/dsh-diff-view/events")
+      .handler({ method: "GET", url: "/dsh-diff-view/events", headers: {} }, lost);
+    await lost.finished;
+    assert.equal(lost.statusCode, 404);
+    assert.equal(lost.json().state, "error");
+  });
+
+  await check("unloading the plugin ends its streams and stops its watches", async () => {
+    const state = mountPlugin({ sessionCwd: repo });
+    const res = fakeResponse();
+    await state.routes
+      .get("/dsh-diff-view/events")
+      .handler({ method: "GET", url: "/dsh-diff-view/events?sessionId=session-1", headers: {} }, res);
+    await until(() => diffFrames(res).length === 1, "the first pushed frame");
+    assert.ok(state.watchers.size > 0, "the stream armed no directory watch");
+
+    /* `ctx.effect` hands back the disposer the Loader calls when the plugin unloads. */
+    state.dispose();
+    assert.equal(state.disposed, 2, "both routes were not disposed");
+    assert.equal(res.writableEnded, true, "the open stream outlived the plugin");
+    await until(() => state.watchers.size === 0, "the watches to close");
   });
 } finally {
   await rm(root, { recursive: true, force: true });

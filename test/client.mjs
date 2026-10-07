@@ -47,18 +47,131 @@ function element(type, props, key) {
   return { type, props: props ?? {}, key };
 }
 
-/** Minimal `react` surface; every component under test here is hook-free. */
+/** Minimal `react` surface; the components under test that use no hooks ignore it. */
+let rendering = null;
+
+/**
+ * The hook runtime the bundle's `react` delegates to.
+ *
+ * The bundle keeps the `react` object for the lifetime of the module, so the
+ * stub cannot be rebuilt per test: like React's own dispatcher it forwards to
+ * whichever component is rendering right now. This is deliberately the
+ * smallest runtime that can mount the panel and drive its effects, because the
+ * auto-refresh behaviour *is* an effect.
+ */
 const reactStub = {
   createElement: element,
   Fragment: "Fragment",
   Suspense: "Suspense",
-  useState: (initial) => [typeof initial === "function" ? initial() : initial, () => {}],
-  useEffect: () => {},
-  useLayoutEffect: () => {},
-  useRef: (value) => ({ current: value }),
+  useState(initial) {
+    /* The setter outlives this render, so it holds the root rather than reading
+       the ambient dispatcher when a promise resolves later. */
+    const root = rendering;
+    const hook = root.hook("state", () => ({ value: typeof initial === "function" ? initial() : initial }));
+    return [
+      hook.value,
+      (next) => {
+        const value = typeof next === "function" ? next(hook.value) : next;
+        if (Object.is(value, hook.value)) return;
+        hook.value = value;
+        root.invalidate();
+      }
+    ];
+  },
+  useEffect(fn, deps) {
+    const hook = rendering.hook("effect", () => ({ deps: undefined, cleanup: undefined }));
+    const changed =
+      deps === undefined ||
+      hook.deps === undefined ||
+      deps.length !== hook.deps.length ||
+      deps.some((value, index) => !Object.is(value, hook.deps[index]));
+    hook.deps = deps;
+    if (changed) rendering.effects.push([hook, fn]);
+  },
+  useLayoutEffect(fn, deps) {
+    reactStub.useEffect(fn, deps);
+  },
+  useRef(value) {
+    return rendering.hook("ref", () => ({ current: value }));
+  },
   useCallback: (fn) => fn,
-  useMemo: (fn) => fn(),
+  useMemo: (fn) => fn()
 };
+
+/**
+ * Mount a component with the hook runtime above.
+ * @param component - the function component to mount.
+ * @param props - its props.
+ * @returns the mounted root: its tree, its render count, and how to end it.
+ */
+function mount(component, props) {
+  const root = {
+    index: 0,
+    hooks: [],
+    effects: [],
+    renders: 0,
+    inDraw: false,
+    pending: false,
+    unmounted: false,
+    tree: null,
+    /** Borrow the hook slot at the current position, creating it once. */
+    hook(kind, create) {
+      const index = root.index;
+      root.index += 1;
+      if (root.hooks.length <= index || root.hooks[index].kind !== kind) root.hooks[index] = { kind, ...create() };
+      return root.hooks[index];
+    },
+    /** React re-renders on a state change; a nested one is folded into the loop. */
+    invalidate() {
+      if (root.unmounted) return;
+      if (root.inDraw) {
+        root.pending = true;
+        return;
+      }
+      root.draw();
+    },
+    draw() {
+      do {
+        root.pending = false;
+        root.inDraw = true;
+        root.index = 0;
+        root.effects = [];
+        root.renders += 1;
+        const previous = rendering;
+        rendering = root;
+        try {
+          root.tree = component(props);
+        } finally {
+          rendering = previous;
+        }
+        const effects = root.effects;
+        root.effects = [];
+        for (const [hook, fn] of effects) {
+          if (typeof hook.cleanup === "function") hook.cleanup();
+          hook.cleanup = fn() ?? undefined;
+        }
+        root.inDraw = false;
+      } while (root.pending && !root.unmounted);
+    },
+    unmount() {
+      root.unmounted = true;
+      for (const hook of root.hooks) if (typeof hook?.cleanup === "function") hook.cleanup();
+    }
+  };
+  root.draw();
+  return root;
+}
+
+/**
+ * Every text leaf of a rendered tree.
+ * @param tree - the tree to walk.
+ * @returns the strings, joined.
+ */
+function textOf(tree) {
+  const parts = [];
+  walk(tree, undefined, (value) => parts.push(value));
+  return parts.join("");
+}
 
 /**
  * The page's style tag, shared across loads exactly as the real page shares it,
@@ -67,29 +180,51 @@ const reactStub = {
 const styles = { tag: null, appends: 0 };
 
 /**
+ * The page the bundle runs against.
+ *
+ * Shared rather than rebuilt per load, because the bundle closes over it: the
+ * visibility test has to drive the same document the panel subscribed to.
+ */
+const page = {
+  visibilityState: "visible",
+  listeners: new Map(),
+  addEventListener(type, handler) {
+    const list = page.listeners.get(type) ?? [];
+    list.push(handler);
+    page.listeners.set(type, list);
+  },
+  removeEventListener(type, handler) {
+    const list = page.listeners.get(type) ?? [];
+    const index = list.indexOf(handler);
+    if (index >= 0) list.splice(index, 1);
+  },
+  emit(type) {
+    for (const handler of [...(page.listeners.get(type) ?? [])]) handler();
+  },
+  querySelector: () => styles.tag,
+  createElement: () => ({ dataset: {}, textContent: "" }),
+  head: {
+    appendChild: (tag) => {
+      styles.tag = tag;
+      styles.appends += 1;
+    }
+  }
+};
+
+/**
  * Load the bundle the way the Harness page does.
  * @returns the bundle's exports.
  */
 function loadBundle() {
   const window = { __ModuleLoader__: { load: (value) => (registration = value) } };
   let registration;
-  const document = {
-    querySelector: () => styles.tag,
-    createElement: () => ({ dataset: {}, textContent: "" }),
-    head: {
-      appendChild: (tag) => {
-        styles.tag = tag;
-        styles.appends += 1;
-      }
-    }
-  };
   const require = (specifier) => {
     if (specifier === "react") return reactStub;
     if (specifier === "react/jsx-runtime") return { jsx: element, jsxs: element, Fragment: "Fragment" };
     throw new Error(`unexpected require(${JSON.stringify(specifier)})`);
   };
   /* The bundle is a classic script, not a module, so it runs under new Function. */
-  new Function("window", "document", source)(window, document);
+  new Function("window", "document", source)(window, page);
   assert.ok(registration !== undefined, "the bundle never registered itself");
   assert.equal(registration.id, "dsh-diff-view", "the module id must equal the package name");
   return registration.factory(require);
@@ -148,7 +283,7 @@ function byClass(result, className) {
 const here = dirname(fileURLToPath(import.meta.url));
 const source = await readFile(join(here, "..", "lib", "client.js"), "utf8");
 const bundle = loadBundle();
-const { Caret, Gutter, Hunks, FileBlock, Mark } = bundle.__internals;
+const { Caret, Gutter, Hunks, FileBlock, Mark, DiffView, payloadKey } = bundle.__internals;
 
 /**
  * The mark geometry the bundle draws, mirrored here so the assertions name the
@@ -194,6 +329,8 @@ await check("the factory exposes apply, inject, and the test seam", () => {
   assert.equal(typeof FileBlock, "function");
   assert.equal(typeof Mark, "function");
   assert.equal(typeof Caret, "function");
+  assert.equal(typeof DiffView, "function");
+  assert.equal(typeof payloadKey, "function");
 });
 
 const installedCss = () => styles.tag?.textContent ?? "";
@@ -619,6 +756,192 @@ await check("an untracked row is not announced twice", () => {
   const file = { ...trackedFile, status: "untracked", hunks: [], note: "binary" };
   const result = render(FileBlock, { file, open: false, onToggle: () => {}, t: (key) => key });
   assert.deepEqual(byClass(result, "dsh-diff__chip").map((node) => node.props.children), []);
+});
+
+/* --- auto-refresh -------------------------------------------------------- */
+
+/** One turn of the event loop, so a resolved read can settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** A payload shaped exactly as the Host serves one. */
+const readyPayload = {
+  state: "ok",
+  cwd: "/repo",
+  root: "/repo",
+  branch: "main",
+  head: "abc1234",
+  detached: false,
+  unborn: false,
+  truncated: false,
+  counts: { files: 1, tracked: 1, untracked: 0, additions: 2, deletions: 1 },
+  files: [trackedFile],
+  generatedAt: "2026-01-01T00:00:00.000Z"
+};
+
+/** What the route answers with; a test swaps it to say "the diff changed". */
+let routePayload = readyPayload;
+
+/** Every read the panel made. */
+const reads = [];
+globalThis.fetch = async (url, options) => {
+  reads.push({ url: String(url), signal: options?.signal });
+  return { ok: true, status: 200, json: async () => routePayload };
+};
+
+/** Every event stream the panel opened. */
+const streams = [];
+class FakeEventSource {
+  /** Mirrors the browser's own ready-state constant. */
+  static CLOSED = 2;
+  constructor(url) {
+    this.url = url;
+    this.closed = false;
+    this.readyState = 1;
+    this.listeners = new Map();
+    streams.push(this);
+  }
+  addEventListener(type, handler) {
+    const list = this.listeners.get(type) ?? [];
+    list.push(handler);
+    this.listeners.set(type, list);
+  }
+  close() {
+    this.closed = true;
+    this.readyState = FakeEventSource.CLOSED;
+  }
+  emit(type, event = {}) {
+    for (const handler of [...(this.listeners.get(type) ?? [])]) handler(event);
+  }
+}
+globalThis.EventSource = FakeEventSource;
+
+/** The interval timers the panel armed, so the fallback poll is observable. */
+const timers = { set: [], cleared: [] };
+globalThis.setInterval = (fn, ms) => {
+  const token = { fn, ms };
+  timers.set.push(token);
+  return token;
+};
+globalThis.clearInterval = (token) => {
+  timers.cleared.push(token);
+};
+
+await check("the panel reads the route on mount and draws what it returns", async () => {
+  reads.length = 0;
+  streams.length = 0;
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  assert.ok(textOf(view.tree).includes("loading"), "the panel did not start in its loading state");
+  await settle();
+  assert.ok(textOf(view.tree).includes("f.txt"), "the payload never reached the panel");
+  assert.equal(reads.length, 1, "the panel read the route more than once");
+  assert.equal(reads[0].url, "/dsh-diff-view/diff?sessionId=s1");
+  assert.equal(streams.length, 1, "the panel did not subscribe to the change stream");
+  assert.equal(streams[0].url, "/dsh-diff-view/events?sessionId=s1");
+  view.unmount();
+  assert.equal(streams[0].closed, true, "unmounting left the change stream open");
+});
+
+await check("a pushed diff replaces what the panel draws, with no second read", async () => {
+  reads.length = 0;
+  streams.length = 0;
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const pushed = { ...readyPayload, files: [{ ...trackedFile, path: "pushed.txt" }], generatedAt: "later" };
+  streams.at(-1).emit("diff", { data: JSON.stringify(pushed) });
+  assert.ok(textOf(view.tree).includes("pushed.txt"), "the pushed payload was not drawn");
+  assert.equal(reads.length, 1, "the push triggered another read of the route");
+  view.unmount();
+});
+
+await check("a payload the panel already draws is not drawn again", async () => {
+  streams.length = 0;
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const before = view.renders;
+  /* The stream and the initial read can both deliver the same diff, and so can
+     two pushes in a row; redrawing a few thousand lines for one is the cost the
+     panel exists to avoid. */
+  streams.at(-1).emit("diff", { data: JSON.stringify({ ...readyPayload, generatedAt: "again" }) });
+  assert.equal(view.renders, before, "an identical payload caused a redraw");
+  assert.equal(payloadKey(readyPayload), payloadKey({ ...readyPayload, generatedAt: "again" }));
+  view.unmount();
+});
+
+await check("a 'changed' frame reads the route instead of carrying a payload", async () => {
+  reads.length = 0;
+  streams.length = 0;
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const before = reads.length;
+  streams.at(-1).emit("changed");
+  await settle();
+  assert.equal(reads.length, before + 1, "the notice did not re-read the route");
+  view.unmount();
+});
+
+await check("a stream that keeps failing hands the refresh to a slow poll", async () => {
+  reads.length = 0;
+  streams.length = 0;
+  timers.set.length = 0;
+  timers.cleared.length = 0;
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const source = streams.at(-1);
+  /* The browser reconnects on its own, so the first failures are not a verdict. */
+  source.emit("error");
+  source.emit("error");
+  assert.equal(source.closed, false, "the panel gave up on the stream too early");
+  source.emit("error");
+  assert.equal(source.closed, true, "a stream that keeps failing stayed open");
+  assert.equal(timers.set.length, 1, "no fallback poll was armed");
+  assert.equal(timers.set[0].ms, 20000, "the fallback poll runs at an unexpected interval");
+  const before = reads.length;
+  timers.set[0].fn();
+  await settle();
+  assert.equal(reads.length, before + 1, "the fallback poll did not read the route");
+  view.unmount();
+  assert.ok(timers.cleared.includes(timers.set[0]), "unmounting left the fallback poll running");
+});
+
+await check("a stream the browser has failed for good falls back immediately", async () => {
+  reads.length = 0;
+  streams.length = 0;
+  timers.set.length = 0;
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const source = streams.at(-1);
+  /* A 404 or a wrong content type is terminal for an EventSource: no retry is
+     coming, so waiting for three errors would mean never falling back at all. */
+  source.readyState = FakeEventSource.CLOSED;
+  source.emit("error");
+  assert.equal(source.closed, true, "the dead stream was left to retry forever");
+  assert.equal(timers.set.length, 1, "a dead stream armed no fallback poll");
+  view.unmount();
+});
+
+await check("a hidden page drops the stream, and a visible one takes it back", async () => {
+  streams.length = 0;
+  page.visibilityState = "hidden";
+  const hidden = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  assert.equal(streams.length, 0, "a hidden page subscribed anyway");
+  hidden.unmount();
+
+  page.visibilityState = "visible";
+  const view = mount(DiffView, { sessionId: "s1", t: (key) => key });
+  await settle();
+  const first = streams.at(-1);
+  assert.equal(first.closed, false, "a visible page did not subscribe");
+  page.visibilityState = "hidden";
+  page.emit("visibilitychange");
+  assert.equal(first.closed, true, "a hidden page kept its stream open");
+  page.visibilityState = "visible";
+  page.emit("visibilitychange");
+  const second = streams.at(-1);
+  assert.notEqual(second, first, "coming back to the page did not resubscribe");
+  assert.equal(second.closed, false);
+  view.unmount();
+  assert.equal(second.closed, true, "unmounting left the change stream open");
 });
 
 console.log(failures === 0 ? "\nall checks passed" : `\n${String(failures)} check(s) failed`);

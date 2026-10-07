@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 
-import { collectWorkingTreeDiff, hunksFromText, parseStatusEntries, parseNumstat, parseUnifiedPatch, readTextFile } from "../lib/git-diff.js";
+import { collectWorkingTreeDiff, hunksFromText, parseStatusEntries, parseNumstat, parseUnifiedPatch, probeWorkingTree, readTextFile } from "../lib/git-diff.js";
 
 const exec = promisify(execFile);
 
@@ -173,6 +173,49 @@ try {
     assert.equal(result.counts.deletions, 2);
     assert.ok(byPath.get("keep.txt").hunks.length > 0);
     assert.equal(result.root, await realpath(repo));
+  });
+
+  /* --- the change fingerprint --------------------------------------------- */
+  await check("the fingerprint holds still while the tree does", async () => {
+    const first = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    const second = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    assert.equal(first, second);
+    assert.match(first, /^[0-9a-f]{40}$/);
+  });
+
+  await check("a content edit to an already-dirty file moves the fingerprint", async () => {
+    const porcelain = async () =>
+      (await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--branch", "--no-ahead-behind"])).stdout;
+    const before = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    const reported = await porcelain();
+    await writeFile(join(repo, "keep.txt"), "one\nTWO\nthree\nfour\nfive\n");
+    const after = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    /* The whole reason the probe stamps each changed path: porcelain says exactly
+       what it said before, so nothing but the file's own stamp can carry this. */
+    assert.equal(await porcelain(), reported);
+    assert.notEqual(after, before);
+  });
+
+  await check("staging, a fresh untracked file, and a commit each move it", async () => {
+    const before = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    await exec("git", ["add", "keep.txt"], { cwd: repo });
+    const staged = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    assert.notEqual(staged, before, "staging did not move the fingerprint");
+    await writeFile(join(repo, "another.txt"), "new\n");
+    const untracked = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    assert.notEqual(untracked, staged, "a new untracked file did not move the fingerprint");
+    await exec("git", ["commit", "-q", "-m", "wip"], { cwd: repo });
+    const committed = await probeWorkingTree({ run: git, cwd: repo, signal: undefined });
+    assert.notEqual(committed, untracked, "a commit did not move the fingerprint");
+  });
+
+  await check("the fingerprint tells a missing repository from a new one", async () => {
+    const fresh = join(root, "fingerprint-init");
+    await mkdir(fresh);
+    const before = await probeWorkingTree({ run: runIn(fresh), cwd: fresh, signal: undefined });
+    await exec("git", ["init", "-q", "-b", "main"], { cwd: fresh });
+    const after = await probeWorkingTree({ run: runIn(fresh), cwd: fresh, signal: undefined });
+    assert.notEqual(after, before, "git init did not move the fingerprint");
   });
 
   /* --- untracked contents ------------------------------------------------- */

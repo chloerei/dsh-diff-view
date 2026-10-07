@@ -11,6 +11,12 @@ contents are read and presented too. When it does not, the tab shows the **Not a
 git project** state instead. All visible text goes through the client locale
 service, which ships an English and a Chinese dictionary.
 
+The panel is **live**: while it is open and on screen it updates itself when the
+diff changes — an agent editing a file, a new file appearing, a commit or a
+checkout — and it does that without polling the working tree or re-reading the
+diff on a timer. See [Auto-refresh](#auto-refresh) for how, and for what it
+costs when nothing is happening.
+
 Open it from the right sidebar's **+** guide, which shows its **⌘D** keycap
 (`Ctrl+D` on Windows and Linux), or press that key directly. Either way, if the
 tab is already open it is focused rather than duplicated.
@@ -26,6 +32,7 @@ tab is already open it is focused rather than duplicated.
 | clean tree | "The working tree has no changes." |
 | no `.git` | "Not a git project" with the inspected directory |
 | git missing or failing | The error text and a retry button |
+| the diff changes | The panel redraws itself in place; a file's expanded state survives the update |
 
 ## Files
 
@@ -33,11 +40,13 @@ tab is already open it is focused rather than duplicated.
 |---|---|
 | `package.json` | Bundle + `dsh.client` manifest (`.`, `./client`, bundle patch) |
 | `cordis.patch.yml` | The bundle layer: one `insert` row named `dsh-diff-view` |
-| `lib/index.js` | Host half: the read-only `GET /dsh-diff-view/diff` route |
-| `lib/git-diff.js` | Host half: pure git collection and unified-diff parsing |
-| `lib/client.js` | Browser half: the `git-diff` tab type and its body |
+| `lib/index.js` | Host half: the read-only `GET /dsh-diff-view/diff` route and the `GET /dsh-diff-view/events` stream |
+| `lib/git-diff.js` | Host half: pure git collection, the change fingerprint, and unified-diff parsing |
+| `lib/diff-watch.js` | Host half: when a change is worth collecting, and which directories to watch |
+| `lib/client.js` | Browser half: the `git-diff` tab type, its body, and its subscription |
 | `test/smoke.mjs` | Host-half checks against throwaway repositories |
-| `test/host-route.mjs` | Host-half checks that drive the registered route |
+| `test/watch.mjs` | Host-half checks for the change detector, over fakes |
+| `test/host-route.mjs` | Host-half checks that drive the registered routes |
 | `test/client.mjs` | Browser-half checks that render the bundle without React |
 
 Both halves are plain, hand-written JavaScript. No build step, no bundler, no
@@ -80,12 +89,17 @@ exists would therefore pin whichever CSS the first load happened to carry, and
 every later edit would apply to nothing until a full page refresh. The bundle
 updates an existing tag instead, which `test/client.mjs` pins.
 
-**`lib/index.js` and `lib/git-diff.js` — restart.** The profile's HMR watches
-composition files (`package.json`, `cordis.patch.yml`), not host module source,
-and the loader imports host halves with a plain `import()` and no cache-busting
-URL. Toggling the bundle off and on re-runs its lifecycle but still hands back
-the already-imported module generation, so an application restart is the
-reliable answer.
+**`lib/index.js`, `lib/git-diff.js`, and `lib/diff-watch.js` — restart.** The
+profile's HMR watches composition files (`package.json`, `cordis.patch.yml`),
+not host module source, and the loader imports host halves with a plain
+`import()` and no cache-busting URL. Toggling the bundle off and on re-runs its
+lifecycle but still hands back the already-imported module generation, so an
+application restart is the reliable answer.
+
+That ordering is survivable rather than a trap for the event stream: a browser
+half that finds no `GET /dsh-diff-view/events` on the Host it is talking to
+falls back to reading the diff route every 20 s, so auto-refresh is slow but
+present until the restart, and immediate afterwards.
 
 ## Design notes
 
@@ -185,6 +199,55 @@ abandoned after 20 s or when the client disconnects. git runs with
 `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, and `LC_ALL=C` so it can never
 block on a credential prompt, take the index lock, or emit localized output.
 
+<a id="auto-refresh"></a>
+**Auto-refresh.** The panel subscribes to `GET /dsh-diff-view/events`, a
+server-sent event stream, and the Host's half of that subscription is a
+detector per working directory, shared by every viewer of it. The design is one
+cost argument, and every part of it is there to keep a quiet working tree free:
+
+- A **check** runs a *fingerprint*, not a diff: one `git status` and one `stat`
+  per changed path, capped at 400 paths. It never builds a patch and never reads
+  a file's contents. The per-path stamps are what make it honest — a content edit
+  to a file that is already dirty leaves the porcelain output byte for byte
+  identical, so nothing but the file's own mtime and size can carry that change.
+- A **collection** — the full diff — runs only when the fingerprint moved. Its
+  result is compared with the one the viewers hold, so a change that does not
+  alter what the panel draws never becomes a frame.
+- **Directory watches** shorten the wait; they do not raise a payload. Each
+  payload re-arms them over the session directory, the repository root, its
+  administrative directory, and the parent directories of the changed files —
+  sorted and capped, so a large refactor cannot turn into hundreds of watches.
+  Watching a directory reports content changes of the files inside it, which is
+  what makes an agent's next edit arrive in well under a second.
+- A burst of events is **debounced** into one check (300 ms), and a directory
+  that never stops churning is held to one check a second. A log file, a
+  `.DS_Store`, or a lock file written over and over inside a watched directory
+  can therefore never buy more than one fingerprint a second — and a fingerprint
+  that comes back unchanged buys nothing at all.
+- **Idle** is a fingerprint every 15 s, doubling to a minute while the tree
+  stays still, which is what catches a change in a directory nothing is watching
+  yet. The stream carries a keep-alive comment every 25 s.
+- **With no viewer there is nothing at all**: no timer, no watch, no git
+  process. The detector is created by the first stream connection and torn down
+  by the last, and the browser half closes that connection while the page is
+  hidden — a backgrounded panel costs nothing.
+- A payload larger than 512 KiB is announced rather than pushed, and the panel
+  re-reads the route; a diff that big is not worth holding in an event stream.
+
+**Ignored paths never enter the view.** `git status` is asked without
+`--ignored`, so `.gitignore`, `.git/info/exclude`, and the global excludes file
+all apply: build output, logs, and dependencies are absent from the file list,
+and the untracked preview never reads them. The *watches* are not ignore-aware —
+the filesystem service reports an event without a path — but that only ever
+costs a fingerprint, because an ignored file moving changes neither the
+porcelain output nor any stamped path.
+
+The browser half drops a frame whose diff it already draws, so a push that says
+nothing new costs a string compare rather than a redraw of a few thousand lines.
+If the stream cannot be established at all — an older Host that does not serve
+it, a proxy that eats it — the panel falls back to reading the route itself
+every 20 s, and only while the page is visible, rather than going quietly stale.
+
 **Rendering.** Pushes are parsed host-side into hunks carrying per-line numbers,
 so the browser does no diff parsing and no number arithmetic. Each hunk line
 carries `oldLine`, `newLine`, and the `number` the view prints, resolved by the
@@ -210,29 +273,47 @@ collapsed when a diff exceeds 1200 lines, and no single file renders more than
 ## Test
 
 ```
-node test/smoke.mjs       # git collection and unified-diff parsing
-node test/host-route.mjs  # the HTTP route, end to end
-node test/client.mjs      # the browser half, rendered
+node test/smoke.mjs       # git collection, the fingerprint, and parsing
+node test/watch.mjs       # when a change is worth collecting
+node test/host-route.mjs  # both routes, end to end
+node test/client.mjs      # the browser half, rendered and driven
 ```
 
 `smoke.mjs` builds throwaway repositories in the OS temp directory and
 exercises the parser and the collector: clean, dirty, staged, untracked with
 contents, unborn, binary, renamed, quoted paths, CRLF, a file with no final
 newline, an empty file, a file past the preview cap, an unreadable file, the
-untracked budget, a directory with no `.git`, and a missing git executable.
+untracked budget, a directory with no `.git`, and a missing git executable. It
+also pins the fingerprint: still while the tree is, and moved by a content edit
+to an already-dirty file, by staging, by a fresh untracked file, by a commit,
+and by `git init` in a directory that had no repository.
+
+`watch.mjs` drives `lib/diff-watch.js` over fakes — a fingerprint the test
+moves by hand, a collector that counts its calls, and watches the test fires —
+because the property worth asserting is a cost: a working tree nobody is
+watching runs nothing at all, an idle tree is probed but never collected, an
+event that changes nothing the panel draws costs one probe, a payload already on
+screen is never pushed, the watched set follows the payload within its cap, and
+the last viewer takes the timers and the watches with it.
 
 `host-route.mjs` mounts `lib/index.js` on a stub Cordis context whose
-`subprocess` runs real git, then drives the registered handler with fake
-request/response objects: an authorized diff, the `?path=` override, the
-non-git project state, the missing-directory 404, the sandbox-policy fallback,
-the authorization fence, and the 405 for a non-GET method.
+`subprocess` runs real git, then drives the registered handlers with fake
+request/response objects: an authorized diff, the `?path=` override, the non-git
+project state, the missing-directory 404, the sandbox-policy fallback, the
+authorization fence, and the 405 for a non-GET method — then the event stream,
+which is opened, fed a real change on disk, and closed. A failing watch is
+reported rather than fatal, and unloading the plugin ends the streams it holds.
 
 `client.mjs` loads `lib/client.js` through a stub `__ModuleLoader__` and a stub
 `require`, then renders the presentational pieces the bundle exposes as a test
-seam — no React, no DOM. It covers what the Host's own tests cannot: a
-host/client field-name mismatch leaves the payload perfectly correct while the
-panel draws blank, which is exactly how the line-number gutter once rendered
-empty on every line. It asserts that each hunk line's number and side reach the
-gutter, that signs, row tints, hunk headers, and untracked contents are drawn,
-that a collapsed block draws no hunk, and that each `note` renders an
-explanation instead of nothing.
+seam — no React, no DOM — and mounts the tab body on a small hook runtime of its
+own. It covers what the Host's own tests cannot: a host/client field-name
+mismatch leaves the payload perfectly correct while the panel draws blank, which
+is exactly how the line-number gutter once rendered empty on every line. It
+asserts that each hunk line's number and side reach the gutter, that signs, row
+tints, hunk headers, and untracked contents are drawn, that a collapsed block
+draws no hunk, and that each `note` renders an explanation instead of nothing.
+For auto-refresh it asserts that a pushed diff replaces what the panel draws
+without a second read, that a payload already on screen is not redrawn, that a
+`changed` notice re-reads the route, that a failed stream hands over to the slow
+poll, and that a hidden page drops its subscription.
