@@ -176,9 +176,8 @@ command rather than throwing when no session is mounted.
 scale is fixed: the diff reads at one size however the conversation is set.
 `--dsh-diff-code` is the single number (14px); `--dsh-diff-meta` is the chrome's
 own name for that same size, so the toolbar, the counts, and the notices read at
-it too; `micro` is two pixels under it for the small chips; and the gutter, the
-marks, and the glyph boxes are sized to match. Changing that one number resizes
-the whole panel, text and geometry together.
+it too; and the gutter, the marks, and the glyph boxes are sized to match.
+Changing that one number resizes the whole panel, text and geometry together.
 
 The panel deliberately does **not** read `--dsh-content-font-size`, the
 preference the theme publishes on the body for Settings → Font size. Following it

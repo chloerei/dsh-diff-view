@@ -300,9 +300,6 @@ const trackedFile = {
   path: "f.txt",
   previousPath: null,
   status: "modified",
-  staged: false,
-  unstaged: true,
-  conflicted: false,
   binary: false,
   note: null,
   additions: 2,
@@ -755,7 +752,6 @@ await check("the panel keeps one fixed type scale, off the app's font-size prefe
   assert.match(root, /--dsh-diff-code:14px/, "the base size changed");
   /* The chrome reads at the diff's own size, not a step under it. */
   assert.match(root, /--dsh-diff-meta:var\(--dsh-diff-code\)/, "the chrome no longer reads at the diff's size");
-  assert.match(root, /--dsh-diff-micro:calc\(var\(--dsh-diff-code\) - 2px\)/, "the micro step is not derived");
   assert.match(root, /--dsh-diff-strong:calc\(var\(--dsh-diff-code\) \+ 2px\)/, "the strong step is not derived");
   assert.match(root, /font-size:var\(--dsh-diff-meta\)/, "the panel does not size its text from the scale");
   /* The change itself is the panel's content, so it takes the largest step. */
@@ -800,12 +796,6 @@ await check("the colour follows the symbol, so a mark means the same thing every
     const [badge] = byClass(render(FileBlock, { file, open: false, onToggle: () => {}, t: (key) => key }), "dsh-diff__badge");
     assert.equal(badge.props["data-mark"], mark, `${status} draws a mark with no colour rule`);
   }
-});
-
-await check("an untracked row is not announced twice", () => {
-  const file = { ...trackedFile, status: "untracked", hunks: [], note: "binary" };
-  const result = render(FileBlock, { file, open: false, onToggle: () => {}, t: (key) => key });
-  assert.deepEqual(byClass(result, "dsh-diff__chip").map((node) => node.props.children), []);
 });
 
 /* --- auto-refresh -------------------------------------------------------- */

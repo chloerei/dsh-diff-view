@@ -152,7 +152,6 @@ try {
     assert.equal(byPath.get("keep.txt").status, "modified");
     assert.equal(byPath.get("keep.txt").additions, 2);
     assert.equal(byPath.get("keep.txt").deletions, 1);
-    assert.equal(byPath.get("keep.txt").unstaged, true);
     assert.equal(byPath.get("staged.txt").status, "added");
     assert.equal(byPath.get("remove.txt").status, "deleted");
     assert.equal(result.counts.tracked, 3);
@@ -173,6 +172,19 @@ try {
     assert.equal(result.counts.deletions, 2);
     assert.ok(byPath.get("keep.txt").hunks.length > 0);
     assert.equal(result.root, await realpath(repo));
+  });
+
+  await check("staging a file the tree already reported does not change the payload", async () => {
+    /* The panel draws one mark per file and says nothing about where between the
+       index and the worktree a change sits, so a bare `git add` must serialize
+       exactly as before -- otherwise the watcher's payload comparison would push
+       a redraw of a view that did not move. */
+    const before = await collectWorkingTreeDiff({ run: git, cwd: repo, signal: undefined });
+    await exec("git", ["add", "keep.txt"], { cwd: repo });
+    const staged = await collectWorkingTreeDiff({ run: git, cwd: repo, signal: undefined });
+    assert.deepEqual(staged.files, before.files, "staging changed what the view draws");
+    /* Leave the tree as the surrounding checks found it. */
+    await exec("git", ["reset", "-q", "HEAD", "--", "keep.txt"], { cwd: repo });
   });
 
   /* --- the change fingerprint --------------------------------------------- */
