@@ -21,55 +21,33 @@ Open it from the right sidebar's **+** guide, which shows its **⌘D** keycap
 (`Ctrl+D` on Windows and Linux), or press that key directly. Either way, if the
 tab is already open it is focused rather than duplicated.
 
-## What it looks like
-
-| State | Body |
-|---|---|
-| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and a two-column line-number gutter, plus one toolbar toggle that opens or closes every file |
-| tracked change | That file's hunks against `HEAD` |
-| untracked file | Its whole contents as one all-additions hunk, marked `+` with a dashed border; tracked changes are listed first, untracked files after |
-| file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
-| clean tree | "The working tree has no changes." |
-| no `.git` | "Not a git project" with the inspected directory |
-| git missing or failing | The error text and a retry button |
-| the diff changes | The panel redraws itself in place; a file's expanded state survives the update |
-
-## Files
-
-| Path | Role |
-|---|---|
-| `package.json` | Bundle + `dsh.client` manifest (`.`, `./client`, bundle patch) |
-| `cordis.patch.yml` | The bundle layer: one `insert` row named `dsh-diff-view` |
-| `lib/index.js` | Host half: the read-only `GET /dsh-diff-view/diff` route and the `GET /dsh-diff-view/events` stream |
-| `lib/git-diff.js` | Host half: pure git collection, the change fingerprint, and unified-diff parsing |
-| `lib/diff-watch.js` | Host half: when a change is worth collecting, and which directories to watch |
-| `lib/client.js` | Browser half: the `dsh-diff-view` tab type, its body, and its subscription |
-| `test/smoke.mjs` | Host-half checks against throwaway repositories |
-| `test/watch.mjs` | Host-half checks for the change detector, over fakes |
-| `test/host-route.mjs` | Host-half checks that drive the registered routes |
-| `test/client.mjs` | Browser-half checks that render the bundle without React |
-
-Both halves are plain, hand-written JavaScript. No build step, no bundler, no
-runtime dependency: the browser artifact is the `window.__ModuleLoader__.load`
-CJS-factory form that the Harness client serves verbatim, and it draws only with
-`react` and theme CSS variables.
-
 ## Install
 
-The installer takes an **absolute** path to this package directory — relative
-paths are rejected:
+Install it from a local checkout:
 
 ```
-dsh plugin --profile desktop add /absolute/path/to/dsh-diff-view
+dsh plugin --profile desktop add "$PWD"
 ```
 
-From the package root, `"$PWD"` expands to that path:
-`dsh plugin --profile desktop add "$PWD"`.
+Run from the package root, `"$PWD"` expands to this directory. A bare `.` is
+anchored against the directory the command runs in, so `add .` says the same
+thing there, and an absolute `add /absolute/path/to/dsh-diff-view` works from
+anywhere. This form records a `link:` dependency, so the profile reads the
+checkout itself rather than a copy.
 
-Equivalently, install it through the agent's `plugin_manager` tool with
-`action: install_bundle` and this directory as `target`. Either route records a
-`link:` dependency in the profile and appends `dsh-diff-view` to
-`dsh.profile.bundles`, so the bundle patch supplies the row.
+Or install it straight from GitHub:
+
+```
+dsh plugin --profile desktop add https://github.com/chloerei/dsh-diff-view
+```
+
+This one records a git dependency instead of a link.
+
+Either spec also works through the agent's `plugin_manager` tool, as
+`action: install_bundle` with that spec as `target`; that route is the strict one
+and insists on an absolute directory. However the package arrives, the profile
+appends `dsh-diff-view` to `dsh.profile.bundles`, so the bundle patch supplies
+the row.
 
 Then open a session and use **+** in the right sidebar's tab strip.
 
@@ -103,6 +81,39 @@ That ordering is survivable rather than a trap for the event stream: a browser
 half that finds no `GET /dsh-diff-view/events` on the Host it is talking to
 falls back to reading the diff route every 20 s, so auto-refresh is slow but
 present until the restart, and immediate afterwards.
+
+## What it looks like
+
+| State | Body |
+|---|---|
+| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and a two-column line-number gutter, plus one toolbar toggle that opens or closes every file |
+| tracked change | That file's hunks against `HEAD` |
+| untracked file | Its whole contents as one all-additions hunk, marked `+` with a dashed border; tracked changes are listed first, untracked files after |
+| file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
+| clean tree | "The working tree has no changes." |
+| no `.git` | "Not a git project" with the inspected directory |
+| git missing or failing | The error text and a retry button |
+| the diff changes | The panel redraws itself in place; a file's expanded state survives the update |
+
+## Files
+
+| Path | Role |
+|---|---|
+| `package.json` | Bundle + `dsh.client` manifest (`.`, `./client`, bundle patch) |
+| `cordis.patch.yml` | The bundle layer: one `insert` row named `dsh-diff-view` |
+| `lib/index.js` | Host half: the read-only `GET /dsh-diff-view/diff` route and the `GET /dsh-diff-view/events` stream |
+| `lib/git-diff.js` | Host half: pure git collection, the change fingerprint, and unified-diff parsing |
+| `lib/diff-watch.js` | Host half: when a change is worth collecting, and which directories to watch |
+| `lib/client.js` | Browser half: the `dsh-diff-view` tab type, its body, and its subscription |
+| `test/smoke.mjs` | Host-half checks against throwaway repositories |
+| `test/watch.mjs` | Host-half checks for the change detector, over fakes |
+| `test/host-route.mjs` | Host-half checks that drive the registered routes |
+| `test/client.mjs` | Browser-half checks that render the bundle without React |
+
+Both halves are plain, hand-written JavaScript. No build step, no bundler, no
+runtime dependency: the browser artifact is the `window.__ModuleLoader__.load`
+CJS-factory form that the Harness client serves verbatim, and it draws only with
+`react` and theme CSS variables.
 
 ## Design notes
 
