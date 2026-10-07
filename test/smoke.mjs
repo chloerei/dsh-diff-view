@@ -67,11 +67,11 @@ try {
     const keep = files.get("keep.txt");
     assert.equal(keep.hunks.length, 1);
     assert.deepEqual(keep.hunks[0].lines.map((line) => line.kind), ["context", "delete", "add", "add", "context"]);
-    assert.deepEqual(keep.hunks[0].lines[0], { kind: "context", text: "one", oldLine: 1, newLine: 1, number: 1 });
-    assert.deepEqual(keep.hunks[0].lines[1], { kind: "delete", text: "two", oldLine: 2, newLine: null, number: 2 });
-    assert.deepEqual(keep.hunks[0].lines[2], { kind: "add", text: "TWO", oldLine: null, newLine: 2, number: 2 });
-    assert.deepEqual(keep.hunks[0].lines[3], { kind: "add", text: "two and a half", oldLine: null, newLine: 3, number: 3 });
-    assert.deepEqual(keep.hunks[0].lines[4], { kind: "context", text: "three", oldLine: 3, newLine: 4, number: 4 });
+    assert.deepEqual(keep.hunks[0].lines[0], { kind: "context", text: "one", oldLine: 1, newLine: 1 });
+    assert.deepEqual(keep.hunks[0].lines[1], { kind: "delete", text: "two", oldLine: 2, newLine: null });
+    assert.deepEqual(keep.hunks[0].lines[2], { kind: "add", text: "TWO", oldLine: null, newLine: 2 });
+    assert.deepEqual(keep.hunks[0].lines[3], { kind: "add", text: "two and a half", oldLine: null, newLine: 3 });
+    assert.deepEqual(keep.hunks[0].lines[4], { kind: "context", text: "three", oldLine: 3, newLine: 4 });
     assert.equal(files.get("new.txt").status, "renamed");
     assert.equal(files.get("new.txt").previousPath, "old.txt");
   });
@@ -166,7 +166,7 @@ try {
     assert.equal(fresh.deletions, 0);
     assert.equal(fresh.note, null);
     assert.deepEqual(fresh.hunks, [
-      { header: "@@ -0,0 +1,1 @@", lines: [{ kind: "add", text: "untracked", oldLine: null, newLine: 1, number: 1 }] }
+      { header: "@@ -0,0 +1,1 @@", lines: [{ kind: "add", text: "untracked", oldLine: null, newLine: 1 }] }
     ]);
     /* Untracked additions join the running total. */
     assert.equal(result.counts.additions, 4);
@@ -233,24 +233,24 @@ try {
   await check("hunksFromText presents a file as one all-additions hunk", () => {
     assert.deepEqual(hunksFromText(""), []);
     assert.deepEqual(hunksFromText("a\n"), [
-      { header: "@@ -0,0 +1,1 @@", lines: [{ kind: "add", text: "a", oldLine: null, newLine: 1, number: 1 }] }
+      { header: "@@ -0,0 +1,1 @@", lines: [{ kind: "add", text: "a", oldLine: null, newLine: 1 }] }
     ]);
     /* A missing final newline is git's own annotation, and empty lines survive. */
     assert.deepEqual(hunksFromText("a\n\nb"), [
       {
         header: "@@ -0,0 +1,3 @@",
         lines: [
-          { kind: "add", text: "a", oldLine: null, newLine: 1, number: 1 },
-          { kind: "add", text: "", oldLine: null, newLine: 2, number: 2 },
-          { kind: "add", text: "b", oldLine: null, newLine: 3, number: 3 },
-          { kind: "meta", text: "No newline at end of file", oldLine: null, newLine: null, number: null }
+          { kind: "add", text: "a", oldLine: null, newLine: 1 },
+          { kind: "add", text: "", oldLine: null, newLine: 2 },
+          { kind: "add", text: "b", oldLine: null, newLine: 3 },
+          { kind: "meta", text: "No newline at end of file", oldLine: null, newLine: null }
         ]
       }
     ]);
     /* CRLF is normalised for display so no stray caret shows. */
     assert.deepEqual(hunksFromText("a\r\nb\r\n")[0].lines, [
-      { kind: "add", text: "a", oldLine: null, newLine: 1, number: 1 },
-      { kind: "add", text: "b", oldLine: null, newLine: 2, number: 2 }
+      { kind: "add", text: "a", oldLine: null, newLine: 1 },
+      { kind: "add", text: "b", oldLine: null, newLine: 2 }
     ]);
   });
 
@@ -266,8 +266,8 @@ try {
     assert.equal(plain.additions, 2);
     assert.equal(plain.note, null);
     assert.deepEqual(plain.hunks[0].lines, [
-      { kind: "add", text: "alpha", oldLine: null, newLine: 1, number: 1 },
-      { kind: "add", text: "beta", oldLine: null, newLine: 2, number: 2 }
+      { kind: "add", text: "alpha", oldLine: null, newLine: 1 },
+      { kind: "add", text: "beta", oldLine: null, newLine: 2 }
     ]);
 
     const unterminated = byPath.get("no-newline.txt");

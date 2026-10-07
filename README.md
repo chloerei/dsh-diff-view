@@ -25,7 +25,7 @@ tab is already open it is focused rather than duplicated.
 
 | State | Body |
 |---|---|
-| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and line numbers |
+| git repository | Branch, short HEAD, repo root, `+additions/-deletions`, one collapsible section per file marked `+`/`-`/`*`, with hunks and a two-column line-number gutter |
 | tracked change | That file's hunks against `HEAD` |
 | untracked file | Its whole contents as one all-additions hunk, marked `+` with a dashed border; tracked changes are listed first, untracked files after |
 | file it cannot show | A one-line reason instead of hunks: binary, empty, over the preview cap, unreadable, or skipped by the untracked budget |
@@ -250,17 +250,22 @@ every 20 s, and only while the page is visible, rather than going quietly stale.
 
 **Rendering.** Pushes are parsed host-side into hunks carrying per-line numbers,
 so the browser does no diff parsing and no number arithmetic. Each hunk line
-carries `oldLine`, `newLine`, and the `number` the view prints, resolved by the
-Host: a deletion is cited by its old-side number and everything else by its
-new-side one. Putting that choice on the side that owns the diff means the client
-only prints a field, and the Host's own tests cover which number each line kind
-carries.
+carries `oldLine` and `newLine` as the Host read them — a deletion has an
+old-side number and no new-side one, an addition the reverse, and a context line
+both. Numbering on the side that owns the diff means the client only prints the
+fields it is handed, and the Host's own tests cover which side has a number.
 
-Each line draws **one** number, not two: a two-column gutter is half empty on
-every line it draws — the old-side cell on an addition, the new-side cell on a
-deletion — so in a sidebar panel most of the leading width would be spent on
-nothing. The row's add/delete tint runs under the gutter instead of stopping at
-it, so the leading edge is part of the change rather than a blank band.
+Each line draws **two** numbers, as the built-in review diff's own line does:
+the old side first, then the new side, in two fixed columns with the sign and the
+text after them, so the numbers line up down a hunk and a half-empty column still
+says which side a line belongs to. The line is one CSS grid rather than a flex
+row, which is what keeps those columns true across every line whatever the text
+does. A changed line takes the built-in file-diff treatment: the row wears
+`--dsw-alias-file-diff-added-bg` / `-deleted-bg`, its number cells take the
+matching `-gutter` fill and `-marker` colour, and a **3px marker** runs down the
+leading edge — the same `inset 3px 0 0` border the built-in draws — so a change
+is visible before a single character is read. The marker sits on the old-side
+cell, which starts at the panel edge, so it reads as the row's own left border.
 
 Lines are inset from both panel edges, and a long line **wraps** rather than
 scrolling sideways: the panel is narrow, and a horizontal scrollbar in it hides
@@ -310,9 +315,11 @@ seam — no React, no DOM — and mounts the tab body on a small hook runtime of
 own. It covers what the Host's own tests cannot: a host/client field-name
 mismatch leaves the payload perfectly correct while the panel draws blank, which
 is exactly how the line-number gutter once rendered empty on every line. It
-asserts that each hunk line's number and side reach the gutter, that signs, row
-tints, hunk headers, and untracked contents are drawn, that a collapsed block
-draws no hunk, and that each `note` renders an explanation instead of nothing.
+asserts that both of each hunk line's numbers reach their own gutter column, that
+the line is laid out on two number tracks with the changed rows wearing the
+built-in file-diff fill and the 3px leading marker, that signs, row tints, hunk
+headers, and untracked contents are drawn, that a collapsed block draws no hunk,
+and that each `note` renders an explanation instead of nothing.
 For auto-refresh it asserts that a pushed diff replaces what the panel draws
 without a second read, that a payload already on screen is not redrawn, that a
 `changed` notice re-reads the route, that a failed stream hands over to the slow

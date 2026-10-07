@@ -311,9 +311,9 @@ const trackedFile = {
     {
       header: "@@ -1,3 +1,3 @@",
       lines: [
-        { kind: "context", text: "keep", oldLine: 1, newLine: 1, number: 1 },
-        { kind: "delete", text: "old", oldLine: 2, newLine: null, number: 2 },
-        { kind: "add", text: "new", oldLine: null, newLine: 2, number: 2 }
+        { kind: "context", text: "keep", oldLine: 1, newLine: 1 },
+        { kind: "delete", text: "old", oldLine: 2, newLine: null },
+        { kind: "add", text: "new", oldLine: null, newLine: 2 }
       ]
     }
   ]
@@ -355,11 +355,17 @@ await check("a hot reload refreshes the existing stylesheet instead of pinning t
 
 /**
  * Read one rule's declarations out of the installed stylesheet.
+ *
+ * A selector may head a rule on its own or share one with a grouped selector
+ * list, so a `,`-led continuation is allowed between it and the `{`. It cannot
+ * swallow a different selector, which is what keeps `.dsh-diff__line` from
+ * matching `.dsh-diff__line--add`.
+ *
  * @param selector - the exact selector, including any attribute part.
  * @returns the declarations between its braces.
  */
 function rule(selector) {
-  const pattern = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\{([^}]*)\\}`);
+  const pattern = new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:,[^{}]*)?\\{([^}]*)\\}`);
   const match = pattern.exec(installedCss());
   assert.ok(match !== null, `no CSS rule for ${selector}`);
   return match[1];
@@ -375,7 +381,9 @@ await check("long diff lines wrap instead of overflowing the panel", () => {
 });
 
 await check("the diff body is inset from the panel edges", () => {
-  assert.match(rule(".dsh-diff__line"), /padding-left:\s*\d/, "diff lines are flush against the left edge");
+  /* The first number column carries the left inset, so the gutter's own fill
+     and the changed line's marker can start at the panel edge itself. */
+  assert.match(rule(".dsh-diff__no[data-side=old]"), /padding-left:\s*\d/, "diff lines are flush against the left edge");
   assert.match(rule(".dsh-diff__code"), /padding-right:\s*\d/, "diff lines are flush against the right edge");
   assert.match(rule(".dsh-diff__hunkHead"), /padding:\s*\S+\s+\S+/, "the hunk header lost its inset");
 });
@@ -510,24 +518,61 @@ await check("the shortcut resolves a session, and blocks when there is none", ()
   assert.equal(blocked.reason, "shortcut.noSession");
 });
 
-await check("a hunk line's number reaches the gutter", () => {
+await check("both of a hunk line's numbers reach their own gutter column", () => {
   /* The bug this guards: the gutter once read `line.old`/`line.new` while the
      Host sent `oldLine`/`newLine`, so every gutter drew an empty string. */
   const cases = [
-    { line: { kind: "context", text: "same", oldLine: 4, newLine: 4, number: 4 }, side: "new", text: "4" },
-    { line: { kind: "add", text: "added", oldLine: null, newLine: 5, number: 5 }, side: "new", text: "5" },
-    { line: { kind: "delete", text: "gone", oldLine: 6, newLine: null, number: 6 }, side: "old", text: "6" },
-    { line: { kind: "meta", text: "No newline at end of file", oldLine: null, newLine: null, number: null }, side: "new", text: "" }
+    { line: { kind: "context", text: "same", oldLine: 4, newLine: 4 }, sides: ["old", "new"], cells: ["4", "4"] },
+    { line: { kind: "add", text: "added", oldLine: null, newLine: 5 }, sides: ["old", "new"], cells: ["", "5"] },
+    { line: { kind: "delete", text: "gone", oldLine: 6, newLine: null }, sides: ["old", "new"], cells: ["6", ""] },
+    { line: { kind: "meta", text: "No newline at end of file", oldLine: null, newLine: null }, sides: ["old", "new"], cells: ["", ""] }
   ];
   for (const testCase of cases) {
-    const [gutter] = byClass(render(Gutter, { line: testCase.line }), "dsh-diff__no");
-    assert.ok(gutter !== undefined, `no gutter drawn for a ${testCase.line.kind} line`);
-    assert.equal(gutter.props["data-side"], testCase.side, `wrong side for a ${testCase.line.kind} line`);
-    assert.equal(gutter.props.children, testCase.text, `wrong number for a ${testCase.line.kind} line`);
+    const cells = byClass(render(Gutter, { line: testCase.line }), "dsh-diff__no");
+    assert.deepEqual(cells.map((node) => node.props["data-side"]), testCase.sides, `wrong columns for a ${testCase.line.kind} line`);
+    assert.deepEqual(cells.map((node) => node.props.children), testCase.cells, `wrong numbers for a ${testCase.line.kind} line`);
   }
 });
 
-await check("the Host numbers a deletion from the old side and the rest from the new", () => {
+await check("the line numbers are drawn in two columns, not one", () => {
+  /* The panel mirrors the built-in review diff: an old-side number and a
+     new-side number in their own tracks, so the columns line up down a hunk. */
+  const columns = /grid-template-columns:([^;}]*)/.exec(rule(".dsh-diff__line"))?.[1] ?? "";
+  assert.equal(
+    columns.match(/var\(--dsh-diff-gutter\)/g)?.length,
+    2,
+    `the diff line must carry two number columns, got: ${columns}`
+  );
+  assert.match(columns, /minmax\(0,1fr\)/, "the code column cannot shrink to the panel");
+  /* And the gutter is what actually draws the two cells, in that order. */
+  const gutter = rule(".dsh-diff__no");
+  assert.ok(!gutter.includes("width:"), `a gutter cell pins its own width instead of taking a track: ${gutter}`);
+  assert.ok(gutter.includes("text-align:right"), "the numbers are not right-aligned against their column");
+});
+
+await check("a changed line carries a thick marker down its leading edge", () => {
+  /* The built-in review diff marks an add or delete with a 3px inset bar on the
+     first number cell, over the file-diff gutter fill. The bar belongs to the
+     old-side cell, which starts at the panel edge. */
+  for (const [kind, state, token] of [
+    ["add", "success", "added"],
+    ["delete", "error", "deleted"]
+  ]) {
+    const row = rule(`.dsh-diff__line--${kind}`);
+    assert.ok(row.includes(`--dsw-alias-file-diff-${token}-bg`), `the ${kind} row lost its built-in fill`);
+    assert.ok(row.includes(`--dsh-diff-fill:var(--dsw-alias-file-diff-${token}-gutter`), `the ${kind} row lost its built-in gutter fill`);
+    assert.ok(row.includes(`--dsh-diff-marker:var(--dsw-alias-file-diff-${token}-marker`), `the ${kind} row lost its built-in marker colour`);
+    assert.ok(row.includes(`state-${state}-primary`), `the ${kind} row has no fallback colour`);
+    /* The fill reaches the number cells, so the bar sits on the fill. */
+    const cells = rule(`.dsh-diff__line--${kind} .dsh-diff__no`);
+    assert.ok(cells.includes("var(--dsh-diff-fill)") && cells.includes("var(--dsh-diff-marker)"), `the ${kind} numbers lost the gutter fill`);
+    const bar = rule(`.dsh-diff__line--${kind} .dsh-diff__no[data-side=old]`);
+    assert.match(bar, /box-shadow:inset 3px 0 0/, `the ${kind} line has no thick left border`);
+    assert.ok(bar.includes("var(--dsh-diff-marker)"), `the ${kind} border ignores the marker colour`);
+  }
+});
+
+await check("the Host numbers both sides of a changed line", () => {
   const patch = [
     "diff --git a/f.txt b/f.txt",
     "--- a/f.txt",
@@ -540,19 +585,22 @@ await check("the Host numbers a deletion from the old side and the rest from the
   ].join("\n");
   const lines = parseUnifiedPatch(patch).get("f.txt").hunks[0].lines;
   assert.deepEqual(
-    lines.map((entry) => [entry.kind, entry.number]),
+    lines.map((entry) => [entry.kind, entry.oldLine, entry.newLine]),
     [
-      ["context", 1],
-      ["delete", 2],
-      ["add", 2],
-      ["context", 3]
+      ["context", 1, 1],
+      ["delete", 2, null],
+      ["add", null, 2],
+      ["context", 3, 3]
     ]
   );
 });
 
-await check("a rendered hunk shows one number per line, the sign, and the text", () => {
+await check("a rendered hunk shows both numbers per line, the sign, and the text", () => {
   const result = render(Hunks, { file: trackedFile, t: (key) => key });
-  assert.deepEqual(byClass(result, "dsh-diff__no").map((node) => node.props.children), ["1", "2", "2"]);
+  /* Old then new, per line: the context line has both, the deletion only the
+     old side, the addition only the new one. */
+  assert.deepEqual(byClass(result, "dsh-diff__no").map((node) => node.props.children), ["1", "1", "2", "", "", "2"]);
+  assert.deepEqual(byClass(result, "dsh-diff__no").map((node) => node.props["data-side"]), ["old", "new", "old", "new", "old", "new"]);
   assert.deepEqual(byClass(result, "dsh-diff__sign").map((node) => node.props.children), [" ", "-", "+"]);
   const flat = result.text.join("");
   assert.ok(flat.includes("keep") && flat.includes("old") && flat.includes("new"), "line text is missing");
@@ -565,7 +613,8 @@ await check("an untracked file draws as numbered additions", () => {
   const hunks = hunksFromText("alpha\nbeta\n");
   const file = { ...trackedFile, path: "fresh.txt", status: "untracked", additions: 2, deletions: 0, hunks };
   const result = render(Hunks, { file, t: (key) => key });
-  assert.deepEqual(byClass(result, "dsh-diff__no").map((node) => node.props.children), ["1", "2"]);
+  /* A new file has no old side, so only the new column is filled. */
+  assert.deepEqual(byClass(result, "dsh-diff__no").map((node) => node.props.children), ["", "1", "", "2"]);
   assert.deepEqual(byClass(result, "dsh-diff__sign").map((node) => node.props.children), ["+", "+"]);
   const flat = result.text.join("");
   assert.ok(flat.includes("alpha") && flat.includes("beta"), "untracked contents are missing");
@@ -730,7 +779,8 @@ await check("the gutter and the marks are sized to the same scale", () => {
   assert.match(root, /--dsh-diff-gutter:32px/, "the gutter lost its size");
   assert.match(root, /--dsh-diff-mark:14px/, "the marks lost their size");
   assert.match(root, /--dsh-diff-box:18px/, "the mark box lost its size");
-  assert.match(rule(".dsh-diff__no"), /width:var\(--dsh-diff-gutter\)/, "the gutter pins its width");
+  /* The number columns take their width from the scale, one track each. */
+  assert.match(rule(".dsh-diff__line"), /var\(--dsh-diff-gutter\)/, "the gutter columns ignore the scale");
   /* The drawn mark fills whatever box the scale gives it. */
   assert.match(rule(".dsh-diff__badge svg"), /width:var\(--dsh-diff-mark\)/, "the drawn mark ignores the scale");
 });
